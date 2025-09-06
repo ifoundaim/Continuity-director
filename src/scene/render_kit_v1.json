@@ -1,0 +1,37 @@
+{
+  "version": "1.0",
+  "style_tokens": "STYLE: ANIME / CEL-SHADED ONLY. Clean line art, flat color blocks, soft AO. Avoid photoreal language.",
+  "palette_hex": ["#E7E2DC","#B88C5A","#7A5C3B","#A1A7B5","#D3D6DD","#1B1C1E"],
+  "character_sheet": {
+    "poses": [
+      "front_idle","front_talk","three_quarter_left_idle","three_quarter_right_idle",
+      "profile_left","profile_right","back","walk_step","sit_front","sit_side",
+      "reach_tv","point","hold_tablet","hand_closeup_L","hand_closeup_R","face_closeup"
+    ],
+    "sheet_grid": {"cols": 6, "rows": 3},
+    "include_scale_bar_cm": true,
+    "background": "flat #F6F7F9"
+  },
+  "setting_plates": {
+    "floor_plan": {"overlay": ["grid","tick_marks","labels","scale_bar"], "size_px": [2200, 1500]},
+    "elevations": [
+      {"id":"north","size_px":[2200,1400]}, {"id":"south","size_px":[2200,1400]},
+      {"id":"east","size_px":[2200,1400]}, {"id":"west","size_px":[2200,1400]}
+    ],
+    "perspectives": [
+      {"id":"interview","wireframe_first":true,"size_px":[2048,1536]},
+      {"id":"coach","wireframe_first":true,"size_px":[2048,1536]},
+      {"id":"glass","wireframe_first":true,"size_px":[2048,1536]},
+      {"id":"low","wireframe_first":true,"size_px":[2048,1536]}
+    ]
+  },
+  "object_lock_tokens": "Object Lock: table size=7x3 ft center=[10,7] ft; chairs_north count=2 center=[10,5.5] ft spacing=2.5 ft; chairs_south count=2 center=[10,8.5] ft spacing=2.5 ft; whiteboard size=6x4 ft center=[1,7] ft; tv diag=65 in center=[19,7] ft; glass_wall mullion_spacing=3.5 ft; rear_panels count=3 size=2x4 ft.",
+  "camera_presets": [
+    {"id":"interview","fov_deg":50,"pos":[6,5.0,5.2],"look_at":[10,7,4.8]},
+    {"id":"coach","fov_deg":45,"pos":[4,7.5,4.8],"look_at":[10,7,4.8]},
+    {"id":"glass","fov_deg":45,"pos":[15,6.0,5.0],"look_at":[10,7,4.8]},
+    {"id":"low","fov_deg":35,"pos":[9,6.5,3.0],"look_at":[10,7,4.8]}
+  ]
+}
+
+
