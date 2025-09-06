@@ -18,6 +18,7 @@ export default function Home() {
   const [editImg, setEditImg] = useState<string | null>(null);
   const [objImg, setObjImg] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("If Em height drifted, correct to 160.02 cm. Remove table cup.");
+  const [useNearest, setUseNearest] = useState(true);
 
   // PERSISTED STATE
   const defaultProfiles: CharacterProfile[] = [
@@ -79,7 +80,7 @@ export default function Home() {
     const r = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({ camera: cameraPresets[preset], extra: "Anime style enforced; SceneLock fixed.", profiles, settingProfile: setting })
+      body: JSON.stringify({ camera: cameraPresets[preset], extra: "Anime style enforced; SceneLock fixed.", profiles, settingProfile: setting, useNearestRefs: useNearest })
     });
     bump("generate"); setQuota(getTotals());
     if (!r.ok) { alert(await r.text()); return; }
@@ -127,6 +128,7 @@ export default function Home() {
         <div style={{ marginTop:6, display:"flex", gap:8, alignItems:"center" }}>
           <input type="file" accept="image/*" multiple onChange={e=>uploadSetting(e.target.files)} />
           <span style={{ fontSize:12, opacity:0.8 }}>{setting.images_base64.length} refs</span>
+          <label style={{ marginLeft:16 }}><input type="checkbox" checked={useNearest} onChange={e=>setUseNearest(e.target.checked)} /> Use nearest past refs</label>
         </div>
         {setting.images_base64.length > 0 && (
           <div style={{ marginTop:8, display:"flex", gap:6, flexWrap:"wrap" }}>
