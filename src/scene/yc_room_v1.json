@@ -1,0 +1,25 @@
+{
+  "scene_id": "yc_room_v1",
+  "units": "ft",
+  "room": { "width": 20, "depth": 14, "height": 10 },
+  "lighting": { "key": "overhead_led_center", "color_temp_k": 4300, "window_side": "glass_wall_right" },
+  "objects": [
+    { "id": "glass_wall", "type": "glass_wall", "wall": "right", "span_ft": 14, "mullion_spacing_ft": 3.5, "yc_decal_in": 24, "door_at_ft_from_front": 2.0 },
+    { "id": "table", "type": "table", "pos": [10, 7], "size": [7, 3], "height_ft": 2.5 },
+    { "id": "chairs_north", "type": "chairs", "count": 2, "center_ft": [10, 5.5], "spacing_ft": 2.5, "seat_h_in": 18 },
+    { "id": "chairs_south", "type": "chairs", "count": 2, "center_ft": [10, 8.5], "spacing_ft": 2.5, "seat_h_in": 18 },
+    { "id": "whiteboard", "type": "whiteboard", "wall": "left", "center_ft": [1, 7], "size": [6, 4] },
+    { "id": "tv", "type": "display", "wall": "right", "center_ft": [19, 7], "diag_in": 65 },
+    { "id": "panels", "type": "panels", "wall": "rear", "centers_ft": [[10, 13.2], [7, 13.2], [13, 13.2]], "size": [2, 4] },
+    { "id": "floor_grommet", "type": "floor_power", "pos": [10, 7] }
+  ],
+  "scale_anchors": {
+    "aim_height_cm": 170,
+    "em_height_cm": 160.02,
+    "codex_to_aim_ratio": 0.37,
+    "table_h_ft": 2.5,
+    "chair_seat_h_ft": 1.5
+  },
+  "default_camera": { "fov_deg": 50, "pos": [6, 5.0, 5.2], "look_at": [10, 7, 4.8] }
+}
+
