@@ -44,3 +44,8 @@ export interface CharacterProfile {
   images_base64: string[]; // data URLs
 }
 
+export interface SettingProfile {
+  description: string;      // extra setting notes users want enforced
+  images_base64: string[];  // floor plan / elevation / grid / mood refs
+}
+

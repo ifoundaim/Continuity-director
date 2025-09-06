@@ -29,9 +29,11 @@ export const shotPrompt = (
   graph: SceneGraph,
   camera: { fov_deg:number; pos:[number,number,number]; look_at:[number,number,number]},
   extra: string = "",
-  profiles?: CharacterProfile[]
+  profiles?: CharacterProfile[],
+  settingNotes?: string        // << NEW
 ) => `
 ${sceneLockHeader(graph)}
+${settingNotes ? `SETTING NOTES: ${settingNotes}\n` : ""} 
 ${charactersSection(profiles || [])}
 MEDIUM & STYLE: Draw as an ANIME / CEL-SHADED illustration with clean line art, flat color blocks, soft ambient occlusion. No photoreal textures.
 Camera: FOV ${camera.fov_deg}°, position ${camera.pos.join(", ")}, look_at ${camera.look_at.join(", ")}. Adhere to perspective and room proportions. Keep all fixed objects in place.
