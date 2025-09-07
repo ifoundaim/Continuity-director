@@ -678,20 +678,28 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
                     onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), accentHex: e.target.value } as any } as any }))}/>
                 </div>
               </>
-            ) : (model.finishes && model.finishes.floor ? (
-              <>
-                <div>
-                  <label>Concrete tint</label>
-                  <input type="color" value={(model.finishes!.floor as any).tintHex}
-                    onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), tintHex: e.target.value } as any } as any }))}/>
-                </div>
-                <div>
-                  <label>Gloss (GU)</label>
-                  <input type="number" min={0} max={40} step={1} value={(model.finishes!.floor as any).glossGU ?? 10}
-                    onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), glossGU: +e.target.value } as any } as any }))}/>
-                </div>
-              </>
-            ) : null}
+            ) : (
+              (()=>{
+                const fin = model.finishes; const floor:any = fin?.floor as any;
+                if (fin && floor){
+                  return (
+                    <>
+                      <div>
+                        <label>Concrete tint</label>
+                        <input type="color" value={(model.finishes!.floor as any).tintHex}
+                          onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), tintHex: e.target.value } as any } as any }))}/>
+                      </div>
+                      <div>
+                        <label>Gloss (GU)</label>
+                        <input type="number" min={0} max={40} step={1} value={(model.finishes!.floor as any).glossGU ?? 10}
+                          onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), glossGU: +e.target.value } as any } as any }))}/>
+                      </div>
+                    </>
+                  );
+                }
+                return null;
+              })()
+            )}
 
             <div>
               <label>CCT (K)</label>
