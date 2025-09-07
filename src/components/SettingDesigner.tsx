@@ -11,6 +11,7 @@ import { renderOverlayPNG } from "../lib/overlay";
 import type { CameraPose } from "../lib/camera";
 import ElevationEditor from "./ElevationEditor";
 import { exportSceneLockJSON, exportIsometricSVG } from "../lib/exporters";
+import { YC_DESCRIPTIONS } from "../lib/object_descriptions";
 
 type Props = {
   initial?: SceneModel;
@@ -762,7 +763,10 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
             <div style={{ marginTop:10 }}>
               <label>Notes (local UI only)<textarea style={{ width:"100%", minHeight:80 }} value={(selected as any).desc||""} onChange={e=>updateSelected({ } as any)} /></label>
               <label>Description (prompt)
-                <textarea rows={4} style={{ width:"100%" }} value={selected.meta?.description||""} onChange={e=>updateSelected({ meta:{ ...(selected.meta||{}), description:e.target.value } as any })} />
+                <textarea rows={4} style={{ width:"100%" }}
+                  value={selected.meta?.description ?? (YC_DESCRIPTIONS[(selected.kind||"") as string]?.description || "")}
+                  onChange={e=>updateSelected({ meta:{ ...(selected.meta||{}), description:e.target.value } as any })}
+                />
               </label>
               <div style={{ marginTop:6 }}>
                 <div>Object reference images</div>
