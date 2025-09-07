@@ -50,6 +50,24 @@ export type Lighting = {
   style?: "even_panel" | "spot_key_fill";
 };
 
+export type DetectedObject = {
+  kind: "table"|"chair"|"panel"|"whiteboard"|"tv"|"decal"|"plant"|"grommet"|"unknown";
+  label?: string;
+  conf?: number;                 // 0..1
+  bbox_px: { x:number; y:number; w:number; h:number }; // image pixels
+  facing?: 0|90|180|270;         // deg (coarse)
+  wall?: "N"|"S"|"E"|"W"|null;   // if mounted
+  size_hint_ft?: { w?:number; d?:number; h?:number };
+};
+
+export type ObjectProposal = {
+  action: "add"|"update";
+  targetId?: string;             // if update
+  object: Partial<SceneObject> & { kind: SceneObject["kind"] };
+  reason?: string;
+  conf?: number;
+};
+
 export type SceneModel = {
   name?: string;
   room: { width:number; depth:number; height:number };
