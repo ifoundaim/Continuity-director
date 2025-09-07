@@ -1,0 +1,535 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { SceneModel, SceneObject, defaultYCModel, Units } from "../lib/scene_model";
+import { degClamp } from "../lib/scene_model";
+import { PRESETS, applyPreset } from "../lib/presets";
+import { detectCollisions, enforceMinClearance } from "../lib/constraints";
+import DimensionOverlay from "./DimensionOverlay";
+import ElevationEditor from "./ElevationEditor";
+import { exportSceneLockJSON, exportIsometricSVG } from "../lib/exporters";
+
+type Props = {
+  initial?: SceneModel;
+  onChange?: (m: SceneModel)=>void;
+  onExport?: (m: SceneModel)=>void;
+  onBuildPlates?: (m: SceneModel)=>void;
+};
+
+const GRID_FT = 0.5;               // snap every 6 inches
+const CANVAS_W_FALLBACK = 960, CANVAS_H_FALLBACK = 560;
+
+function uid(){ return Math.random().toString(36).slice(2,9); }
+function snap(ft:number){ return Math.round(ft/GRID_FT)*GRID_FT; }
+function clamp(v:number, a:number, b:number){ return Math.max(a, Math.min(b, v)); }
+
+export default function SettingDesigner({ initial, onChange, onExport, onBuildPlates }: Props){
+  const [model, setModel] = useState<SceneModel>(initial || defaultYCModel());
+  const [sel, setSel] = useState<string|null>(null);
+  const [units, setUnits] = useState<Units>(model.units);
+  const [scale, setScale] = useState(1);
+  const [activeTab, setActiveTab] = useState<"plan"|"elevN"|"elevS"|"elevE"|"elevW"|"iso">("plan");
+  const violations = useMemo(()=>detectCollisions(model), [model]);
+  const containerRef = useRef<HTMLDivElement|null>(null);
+  const [canvasSize, setCanvasSize] = useState<{w:number; h:number}>({ w: 1200, h: 720 });
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [panning, setPanning] = useState(false);
+  const lastTouches = useRef<{d:number; cx:number; cy:number} | null>(null);
+  // iso/elevation zoom & pan
+  const [isoZoom, setIsoZoom] = useState(1);
+  const [isoPan, setIsoPan] = useState({ x:0, y:0 });
+  const lastTouchesIso = useRef<{d:number; cx:number; cy:number} | null>(null);
+  const [isoAngle, setIsoAngle] = useState(0);
+  const [elevZoom, setElevZoom] = useState(1);
+  const [elevPan, setElevPan] = useState({ x:0, y:0 });
+  const lastTouchesElev = useRef<{d:number; cx:number; cy:number} | null>(null);
+
+  const CANVAS_W = canvasSize.w || CANVAS_W_FALLBACK;
+  const CANVAS_H = canvasSize.h || CANVAS_H_FALLBACK;
+
+  const pxPerFt = useMemo(()=>{
+    const m = model.room, pad = 40;
+    const sx = (CANVAS_W - pad*2) / m.width;
+    const sy = (CANVAS_H - pad*2) / m.depth;
+    return Math.min(sx, sy);
+  }, [model.room]);
+  useEffect(()=>setScale(pxPerFt),[pxPerFt]);
+
+  useEffect(()=>{ onChange?.(model); localStorage.setItem("settingDesigner:model", JSON.stringify(model)); }, [model]);
+  useEffect(()=>{ const s = localStorage.getItem("settingDesigner:model"); if(s && !initial){ try{ setModel(JSON.parse(s)); }catch{} } }, []);
+
+  useEffect(()=>{
+    function onResize(){
+      if(!containerRef.current) return;
+      const w = Math.min(window.innerWidth - 80, 1400);
+      const h = Math.min(window.innerHeight - 220, 860);
+      setCanvasSize({ w, h });
+    }
+    onResize(); window.addEventListener("resize", onResize);
+    return ()=>window.removeEventListener("resize", onResize);
+  }, []);
+
+  // coordinate helpers
+  const toPx = (ft:number)=> ft*scale;
+  const fromPx = (px:number)=> px/scale;
+  const toOriginX = ()=> (CANVAS_W - toPx(model.room.width))/2;
+  const toOriginY = ()=> (CANVAS_H - toPx(model.room.depth))/2;
+  const toCanvasX = (ft:number)=> toPx(ft) + toOriginX();
+  const toCanvasY = (ft:number)=> toPx(ft) + toOriginY();
+
+  // pointer interaction
+  const dragging = useRef<{id:string; mode:"move"|"resize"|"rotate"|"bubble"; lastX:number; lastY:number} | null>(null);
+  const bubbleDir = useRef<"N"|"E"|"S"|"W"|null>(null);
+
+  function getSvgRectFromEvent(e: React.MouseEvent) {
+    const el = e.currentTarget as any;
+    const svg: any = (el as any).ownerSVGElement || el; // fall back to self if already <svg>
+    return (svg as Element).getBoundingClientRect();
+  }
+
+  function begin(e:React.MouseEvent, id:string, mode: "move"|"resize"|"rotate"|"bubble", dir?: "N"|"E"|"S"|"W"){
+    const rect = getSvgRectFromEvent(e);
+    dragging.current = { id, mode, lastX: e.clientX - rect.left, lastY: e.clientY - rect.top };
+    bubbleDir.current = dir || null;
+  }
+  function end(){ dragging.current = null; bubbleDir.current = null; }
+  function move(e:React.MouseEvent){
+    const drag = dragging.current; if(!drag) return;
+    const rect = getSvgRectFromEvent(e);
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const dx = x - drag.lastX, dy = y - drag.lastY;
+    drag.lastX = x; drag.lastY = y;
+
+    const dirNow = bubbleDir.current;
+
+    setModel(m=>{
+      const i = m.objects.findIndex(o=>o.id===drag.id);
+      if(i<0) return m;
+      const o = { ...m.objects[i] };
+
+      if(drag.mode === "move"){
+        const nx = snap(fromPx(toPx(o.cx) + dx));
+        const ny = snap(fromPx(toPx(o.cy) + dy));
+        o.cx = Math.max(0, Math.min(m.room.width, nx));
+        o.cy = Math.max(0, Math.min(m.room.depth, ny));
+      } else if (drag.mode === "resize"){
+        const nw = snap(o.w + fromPx(dx));
+        const nd = snap(o.d + fromPx(dy));
+        o.w = Math.max(0.2, nw);
+        o.d = Math.max(0.2, nd);
+      } else if (drag.mode === "rotate"){
+        const cx = toCanvasX(o.cx), cy = toCanvasY(o.cy);
+        const ang = Math.atan2(y - cy, x - cx) * 180/Math.PI; // -180..180 (0 = east)
+        let rot = degClamp(ang + 90);
+        if ((e as any).shiftKey) rot = Math.round(rot/15)*15;
+        o.rotation = rot; o.facing = rot;
+      } else if (drag.mode === "bubble"){
+        const dir = dirNow; if(!dir) return m;
+        const step = fromPx(Math.abs(dir==="N"||dir==="S" ? dy : dx));
+        const sign = (dir==="E"||dir==="S") ? 1 : -1;
+        if(dir==="N"||dir==="S") o.cy = Math.max(0, Math.min(m.room.depth, snap(o.cy + sign*step)));
+        else o.cx = Math.max(0, Math.min(m.room.width, snap(o.cx + sign*step)));
+      }
+      const arr = [...m.objects]; arr[i] = o; 
+      return { ...m, objects: arr };
+    });
+  }
+
+  function onSvgMouseDown(e:React.MouseEvent){
+    // Hold Space to pan
+    if ((e as any).nativeEvent?.getModifierState?.(" ")) { setPanning(true); }
+  }
+  function onSvgMouseMove(e:React.MouseEvent){
+    if(panning){ setPan(p=>({ x: p.x + (e as any).movementX, y: p.y + (e as any).movementY })); return; }
+    move(e as any);
+  }
+  function onSvgMouseUp(){ setPanning(false); end(); }
+
+  // Wheel zoom (centered around cursor)
+  function onWheel(e: React.WheelEvent<SVGSVGElement>){
+    if (activeTab !== "plan") return;
+    const isZoomGesture = e.ctrlKey || e.metaKey; // pinch on mac sets ctrlKey; Cmd/Ctrl+wheel to zoom
+    if (isZoomGesture) {
+      const delta = -e.deltaY; if (delta === 0) return;
+      const factor = delta > 0 ? 1.08 : 0.92;
+      const rect = (e.currentTarget as Element).getBoundingClientRect();
+      const mx = e.clientX - rect.left - pan.x; const my = e.clientY - rect.top - pan.y;
+      const newZoom = Math.min(3, Math.max(0.4, zoom * factor));
+      const k = newZoom/zoom;
+      setPan(p=>({ x: mx - k*(mx - p.x), y: my - k*(my - p.y) }));
+      setZoom(newZoom);
+      e.preventDefault();
+    } else {
+      // Two-finger scroll pans the canvas; adjust for zoom so pan feels constant
+      const dx = (e.deltaX || 0) / (zoom || 1);
+      const dy = (e.deltaY || 0) / (zoom || 1);
+      setPan(p=>({ x: p.x - dx, y: p.y - dy }));
+      e.preventDefault();
+    }
+  }
+
+  // Touch pinch-to-zoom + pan with two fingers
+  function onTouchStart(e: React.TouchEvent<SVGSVGElement>){
+    if (activeTab !== "plan") return;
+    if (e.touches.length === 2){
+      const [a,b] = [e.touches[0], e.touches[1]];
+      const dx = b.clientX - a.clientX, dy = b.clientY - a.clientY;
+      const d = Math.hypot(dx, dy);
+      const rect = (e.currentTarget as Element).getBoundingClientRect();
+      const cx = ((a.clientX + b.clientX)/2) - rect.left - pan.x;
+      const cy = ((a.clientY + b.clientY)/2) - rect.top - pan.y;
+      lastTouches.current = { d, cx, cy };
+    }
+  }
+  function onTouchMove(e: React.TouchEvent<SVGSVGElement>){
+    if (activeTab !== "plan") return;
+    if (e.touches.length === 2 && lastTouches.current){
+      e.preventDefault();
+      const [a,b] = [e.touches[0], e.touches[1]];
+      const dx = b.clientX - a.clientX, dy = b.clientY - a.clientY;
+      const d = Math.hypot(dx, dy);
+      const rect = (e.currentTarget as Element).getBoundingClientRect();
+      const cx = ((a.clientX + b.clientX)/2) - rect.left - pan.x;
+      const cy = ((a.clientY + b.clientY)/2) - rect.top - pan.y;
+      const prev = lastTouches.current;
+      const k = d / prev.d;
+      const newZoom = Math.min(3, Math.max(0.4, zoom * k));
+      const kz = newZoom/zoom;
+      setPan(p=>({ x: prev.cx - kz*(prev.cx - p.x), y: prev.cy - kz*(prev.cy - p.y) }));
+      setZoom(newZoom);
+      lastTouches.current = { d, cx, cy };
+    }
+  }
+  function onTouchEnd(){ lastTouches.current = null; }
+
+  // ---------- Iso handlers ----------
+  function onIsoWheel(e: React.WheelEvent<HTMLDivElement>){
+    if (activeTab !== "iso") return;
+    const isZoomGesture = e.ctrlKey || e.metaKey;
+    if (isZoomGesture) {
+      const delta = -e.deltaY; if (delta===0) return;
+      const factor = delta > 0 ? 1.08 : 0.92;
+      const rect = (e.currentTarget as Element).getBoundingClientRect();
+      const mx = e.clientX - rect.left - isoPan.x; const my = e.clientY - rect.top - isoPan.y;
+      const newZoom = Math.min(3, Math.max(0.4, isoZoom * factor));
+      const k = newZoom/isoZoom;
+      setIsoPan(p=>({ x: mx - k*(mx - p.x), y: my - k*(my - p.y) }));
+      setIsoZoom(newZoom); e.preventDefault();
+    } else {
+      const dx = (e.deltaX||0)/(isoZoom||1); const dy = (e.deltaY||0)/(isoZoom||1);
+      setIsoPan(p=>({ x: p.x - dx, y: p.y - dy })); e.preventDefault();
+    }
+  }
+  function onIsoTouchStart(e: React.TouchEvent<HTMLDivElement>){
+    if (activeTab !== "iso") return;
+    if (e.touches.length===2){
+      const [a,b] = [e.touches[0], e.touches[1]];
+      const dx=b.clientX-a.clientX, dy=b.clientY-a.clientY; const d=Math.hypot(dx,dy);
+      const rect = (e.currentTarget as Element).getBoundingClientRect();
+      const cx=((a.clientX+b.clientX)/2)-rect.left-isoPan.x; const cy=((a.clientY+b.clientY)/2)-rect.top-isoPan.y;
+      lastTouchesIso.current={d,cx,cy};
+    }
+  }
+  function onIsoTouchMove(e: React.TouchEvent<HTMLDivElement>){
+    if (activeTab !== "iso") return;
+    if (e.touches.length===2 && lastTouchesIso.current){
+      e.preventDefault(); const [a,b]=[e.touches[0],e.touches[1]];
+      const dx=b.clientX-a.clientX, dy=b.clientY-a.clientY; const d=Math.hypot(dx,dy);
+      const prev=lastTouchesIso.current; const k=d/prev.d; const newZoom=Math.min(3, Math.max(0.4, isoZoom*k));
+      const kz=newZoom/isoZoom; setIsoPan(p=>({ x: prev.cx - kz*(prev.cx - p.x), y: prev.cy - kz*(prev.cy - p.y) })); setIsoZoom(newZoom);
+      lastTouchesIso.current={ d, cx:prev.cx, cy:prev.cy };
+    }
+  }
+  function onIsoTouchEnd(){ lastTouchesIso.current=null; }
+
+  // ---------- Elevation handlers ----------
+  function onElevWheel(e: React.WheelEvent<HTMLDivElement>){
+    if (!activeTab.startsWith("elev")) return;
+    const isZoomGesture = e.ctrlKey || e.metaKey;
+    if (isZoomGesture){
+      const delta=-e.deltaY; if(delta===0) return; const factor=delta>0?1.08:0.92;
+      const rect=(e.currentTarget as Element).getBoundingClientRect(); const mx=e.clientX-rect.left-elevPan.x; const my=e.clientY-rect.top-elevPan.y;
+      const newZoom=Math.min(3, Math.max(0.4, elevZoom*factor)); const k=newZoom/elevZoom;
+      setElevPan(p=>({ x: mx - k*(mx - p.x), y: my - k*(my - p.y) })); setElevZoom(newZoom); e.preventDefault();
+    } else {
+      const dx=(e.deltaX||0)/(elevZoom||1); const dy=(e.deltaY||0)/(elevZoom||1); setElevPan(p=>({ x:p.x - dx, y:p.y - dy })); e.preventDefault();
+    }
+  }
+  function onElevTouchStart(e: React.TouchEvent<HTMLDivElement>){
+    if (!activeTab.startsWith("elev")) return; if(e.touches.length===2){ const [a,b]=[e.touches[0],e.touches[1]]; const dx=b.clientX-a.clientX, dy=b.clientY-a.clientY; const d=Math.hypot(dx,dy); const rect=(e.currentTarget as Element).getBoundingClientRect(); const cx=((a.clientX+b.clientX)/2)-rect.left-elevPan.x; const cy=((a.clientY+b.clientY)/2)-rect.top-elevPan.y; lastTouchesElev.current={d,cx,cy}; }
+  }
+  function onElevTouchMove(e: React.TouchEvent<HTMLDivElement>){
+    if (!activeTab.startsWith("elev")) return; if(e.touches.length===2 && lastTouchesElev.current){ e.preventDefault(); const [a,b]=[e.touches[0],e.touches[1]]; const dx=b.clientX-a.clientX, dy=b.clientY-a.clientY; const d=Math.hypot(dx,dy); const prev=lastTouchesElev.current; const k=d/prev.d; const newZoom=Math.min(3, Math.max(0.4, elevZoom*k)); const kz=newZoom/elevZoom; setElevPan(p=>({ x: prev.cx - kz*(prev.cx - p.x), y: prev.cy - kz*(prev.cy - p.y) })); setElevZoom(newZoom); lastTouchesElev.current={ d, cx:prev.cx, cy:prev.cy }; }
+  }
+  function onElevTouchEnd(){ lastTouchesElev.current=null; }
+
+  // toolbar
+  function add(kind:SceneObject["kind"], name?:string){
+    const o: SceneObject = { id: uid(), kind, label: name || kind, cx: model.room.width/2, cy: model.room.depth/2, w: 2, d: 1, h: 3, rotation: 0, facing: 0, desc: "", images:[] };
+    setModel(m=>({ ...m, objects:[...m.objects, o]}));
+    setSel(o.id);
+  }
+  function addCustom(){ const name = window.prompt("Object name (e.g., YC decal strip):", "custom"); if(name===null) return; add("custom", name.trim() || "custom"); }
+  function remove(id:string){ setModel(m=>({ ...m, objects: m.objects.filter(o=>o.id!==id) })); if(sel===id) setSel(null); }
+
+  const selected = model.objects.find(o=>o.id===sel) || null;
+  function updateSelected(patch: Partial<SceneObject>){ if(!selected) return; setModel(m=>({ ...m, objects: m.objects.map(o=> o.id===selected.id ? { ...o, ...patch } : o ) })); }
+
+  // keyboard
+  useEffect(()=>{
+    function onKey(ev:KeyboardEvent){
+      if(!selected) return;
+      const step = ev.shiftKey ? 2 : 0.5;
+      if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Backspace","Delete","r","R"].includes(ev.key)) ev.preventDefault();
+      if(ev.key==="ArrowUp") updateSelected({ cy: snap(Math.max(0, (selected.cy||0) - step)) });
+      if(ev.key==="ArrowDown") updateSelected({ cy: snap(Math.min(model.room.depth, (selected.cy||0) + step)) });
+      if(ev.key==="ArrowLeft") updateSelected({ cx: snap(Math.max(0, (selected.cx||0) - step)) });
+      if(ev.key==="ArrowRight") updateSelected({ cx: snap(Math.min(model.room.width, (selected.cx||0) + step)) });
+      if(ev.key==="Backspace"||ev.key==="Delete") remove(selected.id);
+      if(ev.key==="r"||ev.key==="R") updateSelected({ rotation: degClamp((selected.rotation||0)+ (ev.shiftKey? -15:15)), facing: degClamp((selected.facing||0)+ (ev.shiftKey? -15:15)) });
+    }
+    window.addEventListener("keydown", onKey); return ()=>window.removeEventListener("keydown", onKey);
+  }, [selected, model.room]);
+
+  // auto-describe (per-object)
+  async function autoDescribeObject(obj: SceneObject){
+    const imgs = (obj.images||[]).slice(0,4); if(!imgs.length) return alert("Add 1–4 object reference images first.");
+    const r = await fetch("/api/describe", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ imagesBase64: imgs })});
+    const j = await r.json(); if(j.error) return alert(j.error); updateSelected({ desc: j.description });
+  }
+
+  function Bubbles({o}:{o:SceneObject}){
+    const cx = toCanvasX(o.cx), cy = toCanvasY(o.cy); const r = 16;
+    const bubbles: {d:"N"|"E"|"S"|"W"; x:number;y:number}[] = [
+      { d:"N", x:cx, y:cy - toPx(o.d)/2 - 22 },
+      { d:"S", x:cx, y:cy + toPx(o.d)/2 + 22 },
+      { d:"W", x:cx - toPx(o.w)/2 - 22, y:cy },
+      { d:"E", x:cx + toPx(o.w)/2 + 22, y:cy },
+    ];
+    const arrow = (d:"N"|"E"|"S"|"W") => d==="N"?"↑":d==="S"?"↓":d==="E"?"→":"←";
+    return (
+      <g>
+        {bubbles.map(b=> (
+          <g key={b.d} transform={`translate(${b.x},${b.y})`} style={{ cursor:"pointer" }}
+             onMouseDown={(e)=>{ e.stopPropagation(); begin(e, o.id, "bubble", b.d); }}
+             onClick={(e)=>{ e.stopPropagation(); const delta = GRID_FT; if(b.d==="N") updateSelected({ cy: snap(o.cy - delta) }); if(b.d==="S") updateSelected({ cy: snap(o.cy + delta) }); if(b.d==="W") updateSelected({ cx: snap(o.cx - delta) }); if(b.d==="E") updateSelected({ cx: snap(o.cx + delta) }); }}>
+            <circle r={r} fill="#1d2433" stroke="#7c9cff" strokeWidth={1.5} />
+            <text textAnchor="middle" dy="0.35em" fill="#cbd3e1" fontSize={12}>{arrow(b.d)}</text>
+          </g>
+        ))}
+      </g>
+    );
+  }
+
+  function RotationAndFacing({o}:{o:SceneObject}){
+    const cx = toCanvasX(o.cx), cy = toCanvasY(o.cy);
+    const rx = cx + toPx(o.w)/2 + 18; const ry = cy - toPx(o.d)/2 - 18;
+    const ang = (o.facing ?? o.rotation ?? 0) - 90; const len = 28;
+    const ax = cx + Math.cos((ang)*Math.PI/180) * len; const ay = cy + Math.sin((ang)*Math.PI/180) * len;
+    return (
+      <g>
+        <line x1={cx} y1={cy} x2={ax} y2={ay} stroke="#60d394" strokeWidth={3} markerEnd="url(#arrowhead)" />
+        <g transform={`translate(${rx},${ry})`} style={{ cursor:"grab" }} onMouseDown={(e)=>{ e.stopPropagation(); begin(e, o.id, "rotate"); }}>
+          <circle r={10} fill="#7c9cff" />
+          <path d="M -4 -2 L 0 -6 L 4 -2" stroke="white" strokeWidth="2" fill="none" />
+        </g>
+      </g>
+    );
+  }
+
+  const defs = (
+    <defs>
+      <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#60d394" />
+      </marker>
+    </defs>
+  );
+
+  return (
+    <div style={{ display:"grid", gridTemplateColumns:"1fr 320px", gap:12 }}>
+      <div>
+        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8, flexWrap:"wrap" }}>
+          {/* presets */}
+          <select onChange={e=>{ const o = applyPreset(e.target.value); if(o){ setModel(m=>({...m, objects:[...m.objects, o]})); setSel(o.id);} e.currentTarget.selectedIndex=0; }}>
+            <option>Add preset…</option>
+            {PRESETS.map(p=>
+              <option key={p.name} value={p.name}>{p.name}</option>
+            )}
+          </select>
+          <button onClick={()=>add("decal")} title="Add decal">+ Decal</button>
+          <button onClick={addCustom} title="Add custom object">+ Custom…</button>
+          <button onClick={()=>setModel(enforceMinClearance(model))}>Resolve Collisions</button>
+          <span style={{ marginLeft:8, color:"#9aa3b2" }}>{violations.length ? `⚠ ${violations.length} collision(s)` : "✅ No collisions"}</span>
+
+          <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
+            <select value={units} onChange={e=>{ const u=e.target.value as Units; setUnits(u); setModel(m=>({ ...m, units:u })); }}>
+              <option value="ft">ft</option><option value="cm">cm</option>
+            </select>
+            <button onClick={()=>{ localStorage.removeItem("settingDesigner:model"); setModel(defaultYCModel()); }}>Reset</button>
+          </div>
+        </div>
+
+        <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+          {(["plan","elevN","elevS","elevE","elevW","iso"] as const).map(t=> (
+            <button key={t} onClick={()=>setActiveTab(t)} style={{ background: activeTab===t ? "#253049" : "#1b2230", border:"1px solid #3a4255", color:"#e9ecf1", padding:"6px 10px", borderRadius:8, cursor:"pointer" }}>
+              {t==="plan"?"Floor plan":t==="iso"?"Isometric":"Elevation "+t.slice(-1)}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
+          <button onClick={()=>setZoom(z=>Math.max(0.5, z-0.1))}>−</button>
+          <span style={{ color:"#9aa3b2" }}>Zoom {(zoom*100)|0}%</span>
+          <button onClick={()=>setZoom(z=>Math.min(3, z+0.1))}>+</button>
+          <button onClick={()=>{ setZoom(1); setPan({x:0,y:0}); }}>Reset</button>
+          <button onClick={()=>{
+            const pad = 60; const sx = (CANVAS_W - pad*2) / model.room.width; const sy = (CANVAS_H - pad*2) / model.room.depth;
+            const fit = Math.min(sx, sy); setZoom(fit / (pxPerFt||1)); setPan({ x:0, y:0 });
+          }}>Fit</button>
+          <span style={{ color:"#5a6374", marginLeft:8 }}>Tip: hold Space and drag to pan</span>
+        </div>
+
+        {activeTab==="plan" && (
+          <svg ref={containerRef as any} width={CANVAS_W} height={CANVAS_H}
+               onWheel={onWheel}
+               onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+               onMouseDown={onSvgMouseDown} onMouseMove={onSvgMouseMove} onMouseUp={onSvgMouseUp} onMouseLeave={onSvgMouseUp}
+               style={{ background:"#0f1217", border:"1px solid #232833", borderRadius:12 }}>
+            {defs}
+            <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+              {Array.from({length:Math.ceil(model.room.width/GRID_FT)+1}).map((_,i)=>{ const x = toCanvasX(i*GRID_FT); return <line key={"gx"+i} x1={x} x2={x} y1={toCanvasY(0)} y2={toCanvasY(model.room.depth)} stroke="#222a38" strokeWidth={i%2===0?1:0.5} /> })}
+              {Array.from({length:Math.ceil(model.room.depth/GRID_FT)+1}).map((_,i)=>{ const y = toCanvasY(i*GRID_FT); return <line key={"gy"+i} y1={y} y2={y} x1={toCanvasX(0)} x2={toCanvasX(model.room.width)} stroke="#222a38" strokeWidth={i%2===0?1:0.5} /> })}
+              <rect x={toCanvasX(0)} y={toCanvasY(0)} width={toPx(model.room.width)} height={toPx(model.room.depth)} fill="none" stroke="#3a4255" strokeWidth={2} />
+              {model.objects.map(o=>{ const x = toCanvasX(o.cx) - toPx(o.w)/2; const y = toCanvasY(o.cy) - toPx(o.d)/2; const seld = sel===o.id; const rot = o.rotation || 0; return (
+                <g key={o.id} transform={`rotate(${rot},${toCanvasX(o.cx)},${toCanvasY(o.cy)})`} onMouseDown={(e)=>{ setSel(o.id); begin(e,o.id,"move"); }}>
+                  <rect x={x} y={y} width={toPx(o.w)} height={toPx(o.d)} fill={seld?"#253049":"#1b2230"} stroke={seld?"#7c9cff":"#3a4255"} strokeWidth={2} rx={6} />
+                  <rect x={x+toPx(o.w)-8} y={y+toPx(o.d)-8} width={14} height={14} fill="#7c9cff" rx={3} title="Resize (drag). Shift: finer grid" onMouseDown={(e)=>{ e.stopPropagation(); setSel(o.id); begin(e,o.id,"resize"); }} />
+                  <text x={toCanvasX(o.cx)} y={toCanvasY(o.cy)} fill="#cbd3e1" textAnchor="middle" dy="0.35em" fontSize={12}>
+                    {o.label || o.kind}
+                  </text>
+                  {seld && <>
+                    <RotationAndFacing o={o} />
+                    <Bubbles o={o} />
+                  </>}
+                </g>
+              ); })}
+              <DimensionOverlay model={model} selected={selected} toCanvasX={toCanvasX} toCanvasY={toCanvasY} toPx={toPx} />
+            </g>
+          </svg>
+        )}
+
+        {activeTab.startsWith("elev") && (
+          <div onWheel={onElevWheel} onTouchStart={onElevTouchStart} onTouchMove={onElevTouchMove} onTouchEnd={onElevTouchEnd}
+               style={{ border:"1px solid #232833", borderRadius:12, overflow:"hidden", background:"#0f1217" }}>
+            <div style={{ transform:`translate(${elevPan.x}px,${elevPan.y}px) scale(${elevZoom})`, transformOrigin:"0 0" }}>
+              <ElevationEditor
+                model={model}
+                wall={activeTab.endsWith("N")?"N":activeTab.endsWith("S")?"S":activeTab.endsWith("E")?"E":"W"}
+                onSelect={(id)=>setSel(id)}
+                onChange={(o)=>setModel(m=>({...m, objects: m.objects.map(x=>x.id===o.id?o:x)}))}
+                selectedId={sel}
+              />
+            </div>
+          </div>
+        )}
+
+        {activeTab==="iso" && (
+          <>
+            <div onWheel={onIsoWheel} onTouchStart={onIsoTouchStart} onTouchMove={onIsoTouchMove} onTouchEnd={onIsoTouchEnd}
+                 style={{ border:"1px solid #232833", borderRadius:12, background:"#0f1217", position:"relative" }}>
+              <div style={{ width:CANVAS_W, height:CANVAS_H, overflow:"auto" }}>
+                <div style={{ width:2000, height:1400, transform:`translate(${isoPan.x}px,${isoPan.y}px) scale(${isoZoom})`, transformOrigin:"0 0" }}
+                     dangerouslySetInnerHTML={{ __html: exportIsometricSVG(model, isoAngle) }} />
+              </div>
+            </div>
+            <div style={{ color:"#9aa3b2", fontSize:12, marginTop:6 }}>
+              Isometric wireframe shows room (blue cage) and objects as extrusions with facing arrows (green). Use this as a geometry ref.
+              <div style={{ marginTop:6 }}>
+                <label>Rotate: </label>
+                <input type="range" min={-180} max={180} value={isoAngle} onChange={e=>setIsoAngle(+e.target.value)} />
+                <span style={{ marginLeft:6 }}>{Math.round(isoAngle)}°</span>
+              </div>
+            </div>
+          </>
+        )}
+
+        <div style={{ display:"flex", gap:8, marginTop:10, flexWrap:"wrap" }}>
+          <button onClick={()=>{
+            const text = exportSceneLockJSON(model);
+            const blob = new Blob([text], { type:"application/json" });
+            const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "yc_room_v1.json"; a.click(); URL.revokeObjectURL(a.href);
+          }}>Export SceneLock JSON</button>
+          <button onClick={()=>{
+            const svg = exportIsometricSVG(model);
+            const blob = new Blob([svg], { type:"image/svg+xml" });
+            const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "iso_wireframe.svg"; a.click(); URL.revokeObjectURL(a.href);
+          }}>Export Isometric SVG</button>
+          <button onClick={()=>onBuildPlates?.(model)}>Generate Plates</button>
+          <button onClick={()=>{ const a = document.createElement("a"); const blob = new Blob([JSON.stringify(model,null,2)], { type:"application/json" }); a.href = URL.createObjectURL(blob); a.download = "setting_model.json"; a.click(); URL.revokeObjectURL(a.href); }}>Download Model</button>
+        </div>
+        <div style={{ display:"flex", gap:12, color:"#9aa3b2", marginTop:6, fontSize:12 }}>
+          <span>Units: {units}</span>
+          {selected && <span>
+            Sel: <strong>{selected.label||selected.kind}</strong> • {selected.cx.toFixed(2)},{selected.cy.toFixed(2)} ft • {selected.w.toFixed(2)}×{selected.d.toFixed(2)}×{(selected.h||0).toFixed(2)} ft • rot {Math.round(selected.rotation||0)}° • face {Math.round(selected.facing ?? selected.rotation ?? 0)}°
+          </span>}
+        </div>
+      </div>
+
+      <div style={{ background:"#14161b", border:"1px solid #232833", borderRadius:12, padding:12 }}>
+        <h3 style={{ marginTop:0 }}>Properties</h3>
+        <div style={{ color:"#9aa3b2", fontSize:13, marginBottom:8 }}>Room: {model.room.width}×{model.room.depth}×{model.room.height} {model.units}</div>
+        {selected ? (
+          <>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+              <label>Name<input value={selected.label||""} onChange={e=>updateSelected({ label:e.target.value })} /></label>
+              <label>Kind<select value={selected.kind} onChange={e=>updateSelected({ kind: e.target.value as any })}>
+                <option>table</option><option>chair</option><option>tv</option><option>whiteboard</option>
+                <option>panel</option><option>plant</option><option>decal</option><option>custom</option>
+              </select></label>
+              <label>Center X<input type="number" step={0.1} value={selected.cx} onChange={e=>updateSelected({ cx:+e.target.value })} /></label>
+              <label>Center Y<input type="number" step={0.1} value={selected.cy} onChange={e=>updateSelected({ cy:+e.target.value })} /></label>
+              <label>Width<input type="number" step={0.1} value={selected.w} onChange={e=>updateSelected({ w:+e.target.value })} /></label>
+              <label>Depth<input type="number" step={0.1} value={selected.d} onChange={e=>updateSelected({ d:+e.target.value })} /></label>
+              <label>Height<input type="number" step={0.1} value={selected.h||0} onChange={e=>updateSelected({ h:+e.target.value })} /></label>
+              <label>Rotation°<input type="number" step={1} value={selected.rotation||0} onChange={e=>updateSelected({ rotation: degClamp(+e.target.value) })} /></label>
+              <label>Facing°<input type="number" step={1} value={selected.facing ?? selected.rotation ?? 0} onChange={e=>updateSelected({ facing: degClamp(+e.target.value) })} /></label>
+              <label>Wall<select value={selected.wall||""} onChange={e=>updateSelected({ wall:(e.target.value||undefined) as any })}>
+                <option value="">(none)</option><option value="N">N</option><option value="S">S</option><option value="E">E</option><option value="W">W</option>
+              </select></label>
+              <label>Mount H<input type="number" step={0.1} value={selected.mount_h||0} onChange={e=>updateSelected({ mount_h:+e.target.value })} /></label>
+            </div>
+
+            <div style={{ marginTop:10 }}>
+              <label>Description<textarea style={{ width:"100%", minHeight:80 }} value={selected.desc||""} onChange={e=>updateSelected({ desc:e.target.value })} /></label>
+              <div style={{ marginTop:6 }}>
+                <div>Object reference images</div>
+                <input type="file" accept="image/*" multiple onChange={async e=>{ const files = e.target.files; if(!files) return; const urls = await Promise.all([...files].map(f=> new Promise<string>(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result as string); fr.readAsDataURL(f); }))); updateSelected({ images:[...(selected.images||[]), ...urls] }); }}/>
+                <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:8 }}>
+                  {(selected.images||[]).map((s,i)=><img key={i} src={s} style={{ width:60, height:60, objectFit:"cover", borderRadius:6, border:"1px solid #232833" }}/>)}
+                </div>
+                <button style={{ marginTop:6 }} onClick={()=>autoDescribeObject(selected)}>Auto-Describe from refs</button>
+              </div>
+            </div>
+
+            <div style={{ display:"flex", gap:8, marginTop:10 }}>
+              <button onClick={()=>remove(selected.id)}>Delete</button>
+            </div>
+          </>
+        ) : (
+          <div style={{ color:"#9aa3b2" }}>Select an object to edit.</div>
+        )}
+
+        <hr style={{ borderColor:"#232833", margin:"12px 0" }}/>
+        <label>Notes<textarea style={{ width:"100%", minHeight:90 }} value={model.notes||""} onChange={e=>setModel(m=>({...m, notes:e.target.value}))} /></label>
+        <div style={{ marginTop:8 }}>
+          <div>Reference images</div>
+          <input type="file" accept="image/*" multiple onChange={async e=>{ const files = e.target.files; if(!files) return; const urls = await Promise.all([...files].map(f=> new Promise<string>(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result as string); fr.readAsDataURL(f); }))); setModel(m=>({...m, refImages:[...(m.refImages||[]), ...urls]})); }}/>
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:8 }}>
+            {(model.refImages||[]).map((s,i)=><img key={i} src={s} style={{ width:74, height:74, objectFit:"cover", borderRadius:8, border:"1px solid #232833" }}/>)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+

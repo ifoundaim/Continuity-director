@@ -107,6 +107,9 @@ export default function Home() {
     <>
     <main className="container">
       <h1>Continuity Director + SceneLock</h1>
+      <p style={{ marginTop:-4 }}>
+        <a href="/designer" style={{ color:"#7c9cff" }}>Open Setting Designer</a>
+      </p>
       <p><strong>Style:</strong> Anime / cel-shaded only. Setting & scale locked. Wireframe and palette included for stability.</p>
       <div className="progress"><div className="progress__bar" style={{ width: `${Math.min(100, (step/6)*100)}%` }} /></div>
 

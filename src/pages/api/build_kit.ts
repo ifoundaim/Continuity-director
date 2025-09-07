@@ -1,5 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import kit from "../../scene/render_kit_v1.json";
+import fs from "fs";
+import path from "path";
 import { buildCharacterSheets, buildElevations, buildFloorPlan, buildPerspectives } from "../../lib/render_kit";
 import type { CharacterProfile, SettingProfile } from "../../lib/types";
 
@@ -42,6 +44,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       manifest.push(...await buildPerspectives(profilesSafe, settingSafe, true));
     }
 
+    // write a copy of last scene model if provided via settingProfile.description/images only (optional future)
+    try {
+      const cacheDir = path.join(process.cwd(), ".cache"); fs.mkdirSync(cacheDir, { recursive: true });
+      // If a user previously exported SceneLock JSON to .cache/setting_model.json, prefer that elsewhere
+    } catch {}
     res.json({ ok:true, items: manifest });
   } catch (e:any) {
     res.status(500).json({ ok:false, error: e.message });
