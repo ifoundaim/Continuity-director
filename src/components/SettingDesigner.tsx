@@ -5,6 +5,8 @@ import { PRESETS, applyPreset } from "../lib/presets";
 import { enforceMinClearance } from "../lib/constraints";
 import { detectCollisions, resolveCollisions, countErrors, countWarnings } from "../lib/collision";
 import { CLEARANCES, QUALITY, REASONS, ROOM_TEMPLATES, OBJECT_DEFAULTS } from "../lib/physics";
+import { proposePlacements, type Calibration } from "../lib/placement";
+import type { ObjectProposal } from "../lib/scene_model";
 import DimensionOverlay from "./DimensionOverlay";
 import CharacterLayer, { CharPlacement } from "./CharacterLayer";
 import { renderOverlayPNG } from "../lib/overlay";
@@ -65,6 +67,13 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   const [finRefFiles, setFinRefFiles] = useState<FileList|null>(null);
   const [busyFin, setBusyFin] = useState(false);
   const [paletteUrl, setPaletteUrl] = useState<string | null>(null);
+  // Auto-propose from refs
+  const [objRefFiles, setObjRefFiles] = useState<FileList|null>(null);
+  const [proposals, setProposals] = useState<ObjectProposal[]|null>(null);
+  const [busyObj, setBusyObj] = useState(false);
+  const [cal, setCal] = useState<Calibration|undefined>(undefined);
+  const [calMode, setCalMode] = useState<null|"p1"|"p2">(null);
+  const [calTemp, setCalTemp] = useState<{p1?:{x:number;y:number}, p2?:{x:number;y:number}}>({});
 
   const CANVAS_W = canvasSize.w || CANVAS_W_FALLBACK;
   const CANVAS_H = canvasSize.h || CANVAS_H_FALLBACK;
@@ -166,6 +175,21 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   }
 
   function onSvgMouseDown(e:React.MouseEvent){
+    // calibration clicks
+    if (calMode){
+      const rect = (e.currentTarget as Element).getBoundingClientRect();
+      const sx = e.clientX - rect.left; const sy = e.clientY - rect.top;
+      const cx = screenToCanvasX(sx); const cy = screenToCanvasY(sy);
+      if (calMode === "p1"){ setCalTemp(v=>({ ...v, p1:{ x: cx, y: cy } })); setCalMode("p2"); }
+      else if (calMode === "p2"){
+        const p1 = calTemp.p1!; const p2 = { x: cx, y: cy };
+        const dft = Number((window.prompt("Distance between points (ft)", "3.5")||"3.5")) || 3.5;
+        const wall = (window.prompt("Back wall (N/S/E/W)?", "E") as any) || "E";
+        setCal({ imageW: CANVAS_W, imageH: CANVAS_H, p1, p2, distanceFt: dft, backWall: wall });
+        setCalMode(null); setCalTemp({});
+      }
+      return; // don't start pan/drag
+    }
     // Hold Space to pan
     if ((e as any).nativeEvent?.getModifierState?.(" ")) { setPanning(true); }
   }
@@ -554,6 +578,21 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           <button onClick={addCustom} title="Add custom object">+ Custom…</button>
           <button onClick={()=>{ const r = resolveCollisions(model, 8); setModel(r.model); setCollisions(r.remaining); }}>Resolve Collisions</button>
           <button onClick={makeItValid}>Make it valid</button>
+          {/* Auto-Propose objects */}
+          <input type="file" accept="image/*" multiple onChange={e=>setObjRefFiles(e.target.files)} />
+          <button disabled={!objRefFiles || busyObj} onClick={async ()=>{
+            if (!objRefFiles) return; setBusyObj(true);
+            const arr = await Promise.all(Array.from(objRefFiles).map(async f=>{
+              const buf = await f.arrayBuffer(); return Buffer.from(buf as any).toString("base64");
+            }));
+            const det = await fetch("/api/interpret/objects", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ imagesBase64: arr })}).then(r=>r.json());
+            try{
+              const mapped = proposePlacements(det, model, cal);
+              const P: ObjectProposal[] = mapped.map((p:any)=>({ action:"add", object:p.obj, conf:p.conf, reason:p.reason }));
+              setProposals(P);
+            } finally { setBusyObj(false); }
+          }}>{busyObj?"Interpreting…":"Auto-Propose (objects)"}</button>
+          <button onClick={()=> setCalMode(calMode?null:"p1")}>{calMode?"Exit calibration":"Calibrate scale"}</button>
           <label style={{ marginLeft:8 }}>
             <input type="checkbox" checked={showCollisions} onChange={e=>setShowCollisions(e.target.checked)} />
             Show collisions
@@ -744,6 +783,43 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           <span style={{ color:"#5a6374", marginLeft:8 }}>Tip: hold Space and drag to pan</span>
         </div>
 
+        {proposals && (
+          <div style={{margin:"6px 0", padding:"6px", border:"1px dashed #444", borderRadius:8}}>
+            <b>Proposals</b> ({proposals.length})
+            <div style={{maxHeight:160, overflow:"auto", marginTop:6}}>
+              {proposals.map((p,i)=> (
+                <div key={i} style={{display:"flex", gap:8, alignItems:"center", fontSize:12, marginBottom:4}}>
+                  <span>{p.object.kind}</span>
+                  <span>conf {Math.round((p.conf||0)*100)}%</span>
+                  <button onClick={()=>{
+                    setModel(m=>({ ...m, objects:[...m.objects, {
+                      id: crypto.randomUUID(),
+                      kind: p.object.kind as any,
+                      cx: (p.object as any).cx, cy: (p.object as any).cy,
+                      w: (p.object as any).w, d: (p.object as any).d, h: (p.object as any).h,
+                      wall: (p.object as any).wall, rotation: (p.object as any).rotation||0, label: (p.object as any).label
+                    }]}));
+                    setProposals(prev=> prev!.filter((_,j)=>j!==i));
+                  }}>Accept</button>
+                  <button onClick={()=> setProposals(prev=> prev!.filter((_,j)=>j!==i))}>Dismiss</button>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex", gap:8, marginTop:6}}>
+              <button onClick={()=>{
+                setModel(m=>({ ...m, objects:[...m.objects, ...proposals.map(p=>({
+                  id: crypto.randomUUID(), kind:p.object.kind as any,
+                  cx:(p.object as any).cx, cy:(p.object as any).cy,
+                  w:(p.object as any).w, d:(p.object as any).d, h:(p.object as any).h,
+                  wall:(p.object as any).wall, rotation:(p.object as any).rotation||0, label:(p.object as any).label
+                }))]}));
+                setProposals(null);
+              }}>Accept all</button>
+              <button onClick={()=> setProposals(null)}>Clear proposals</button>
+            </div>
+          </div>
+        )}
+
         {activeTab==="plan" && (
           <svg ref={containerRef as any} width={CANVAS_W} height={CANVAS_H}
                onWheel={onWheel}
@@ -785,6 +861,18 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
                   </>}
                 </g>
               ); })}
+              {/* Proposed ghost objects */}
+              {proposals && proposals.map((p,i)=>{
+                const o:any = p.object; if (o?.cx==null || o?.cy==null) return null;
+                const gx = toCanvasX(o.cx) - toPx((o.w||2))/2; const gy = toCanvasY(o.cy) - toPx((o.d||2))/2;
+                const rot = o.rotation||0;
+                return (
+                  <g key={`prop-${i}`} transform={`rotate(${rot},${toCanvasX(o.cx)},${toCanvasY(o.cy)})`}>
+                    <rect x={gx} y={gy} width={toPx(o.w||2)} height={toPx(o.d||2)} fill="none" stroke="#66CCFF" strokeDasharray="6 4" strokeWidth={2}/>
+                    <text x={toCanvasX(o.cx)} y={toCanvasY(o.cy)-(toPx(o.d||2)/2+8)} fill="#66CCFF" textAnchor="middle" fontSize={12}>{o.kind} (prop {Math.round((p.conf||0)*100)}%)</text>
+                  </g>
+                );
+              })}
               {/* Character markers */}
               <CharacterLayer
                 model={model}
