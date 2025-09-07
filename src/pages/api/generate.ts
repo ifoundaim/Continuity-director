@@ -23,24 +23,37 @@ function stableProfiles(list?: CharacterProfile[]) {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const apiKey = process.env.GEMINI_API_KEY!;
-    const { camera, extra, profiles, settingProfile, useNearestRefs } = req.body as {
+    const { camera, extra, profiles, settingProfile, useNearestRefs, overlayBase64, charPlacements, positionLock, settingId } = req.body as {
       camera: any; extra?: string; profiles?: CharacterProfile[]; settingProfile?: SettingProfile; useNearestRefs?: boolean;
+      overlayBase64?: string; charPlacements?: { name:string; x:number; y:number; heightCm:number }[]; positionLock?: string; settingId?: string;
     };
 
     const profilesStable = stableProfiles(profiles);
     const settingStable = { ...(settingProfile || { description: "", images_base64: [] }), images_base64: stableImages(settingProfile?.images_base64) };
 
+    // Position Lock block (optional)
+    const positionLockStr = positionLock || ((charPlacements && charPlacements.length) ? [
+      "Position Lock (ft; room origin at SW floor corner):",
+      ...charPlacements.map((c:any)=>`- ${c.name}: at (${Number(c.x).toFixed(2)}, ${Number(c.y).toFixed(2)}) ft; height ${Math.round(Number(c.heightCm)||0)} cm.`),
+      "Keep characters within 1 ft of these coordinates in the final image."
+    ].join("\n") : "");
+
     const prompt = shotPrompt(
       graphJson as any,
       camera || (graphJson as any).default_camera,
-      extra || "",
+      [extra || "", positionLockStr].filter(Boolean).join("\n\n"),
       profilesStable,
       settingStable.description || ""
     );
 
     // Build parts (deterministic order):
     const parts: any[] = [];
-    // 1) Wireframe first
+    // 0) Overlay FIRST if provided
+    if (overlayBase64) {
+      const buf = Buffer.from(overlayBase64.split(",").pop()!, "base64");
+      parts.push(imagePart(buf));
+    }
+    // 1) Wireframe next
     const wire = renderWireframeSVG(`FOV ${camera?.fov_deg ?? (graphJson as any).default_camera.fov_deg}`);
     parts.push({ inline_data: { data: Buffer.from(wire.svg).toString("base64"), mime_type: wire.mime } });
     // 2) Prompt text next (constant style/wording)
@@ -70,9 +83,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       endpoint: "generate",
       prompt, // already stable wording/order
       wireHash: keyOf(wire.svg),
+      overlayHash: overlayBase64 ? keyOf(overlayBase64) : null,
       settingRefs: settingStable.images_base64.map(keyOf),
       chars: profilesStable.map(cp => ({ n: cp.name, h: cp.height_cm, d: cp.description, imgs: (cp.images_base64 || []).map(keyOf) })),
-      useNearestRefs: !!useNearestRefs
+      posLock: (charPlacements||[]).map(c=>({ n:c.name, x:+c.x, y:+c.y, h:Math.round(+c.heightCm||0) })),
+      useNearestRefs: !!useNearestRefs,
+      positionLock: positionLockStr || null,
+      settingId: settingId || null
     });
 
     const cached = getCache(cacheKey);

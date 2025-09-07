@@ -1,42 +1,55 @@
-export type Units = "ft" | "cm";
+export type Layer = "floor" | "surface" | "wall" | "ceiling";
 
 export type SceneObject = {
   id: string;
-  kind: "table" | "chair" | "panel" | "tv" | "whiteboard" | "plant" | "decal" | "custom";
+  kind: string;        // "table","chair","tv","whiteboard","panel","decal","laptop",...
   label?: string;
-  // Floor-plan placement (center-based)
-  cx: number; cy: number; // in scene units
-  w: number; d: number; h?: number; // w=width (x), d=depth (y), h=height
-  rotation?: number;        // plan rotation (deg)
-  facing?: number;          // front direction (deg, 0=north/up)
-  count?: number; spacing?: number; // for repeated rows
-  wall?: "N"|"S"|"E"|"W"; mount_h?: number; // for wall-mounted (tv, whiteboard, panel)
-  material?: string; decalUrl?: string;
-  desc?: string;            // human description (materials, style)
-  images?: string[];        // per-object refs
+  cx: number; cy: number;     // center (ft) in room coordinates (top-down)
+  w: number; d: number; h?: number;  // size in ft
+  rotation?: number; facing?: number;
+  wall?: "N"|"S"|"E"|"W";      // for wall items
+  mount_h?: number;            // ft from floor to bottom for wall/suspended
+  layer?: Layer;               // NEW
+  attachTo?: string | null;    // NEW: parent object id (e.g., laptop -> table)
+  local?: { dx:number; dy:number; dz?:number }; // NEW: local offset within parent footprint
+  locked?: boolean;            // NEW: resolver won't move
+  meta?: Record<string, any>;
 };
 
 export type SceneModel = {
-  version: "v1";
-  units: Units;
-  room: { width: number; depth: number; height: number }; // scene box
+  name?: string;
+  room: { width:number; depth:number; height:number };
+  wallMaterials?: { N?:"solid"|"glass"; S?:"solid"|"glass"; E?:"solid"|"glass"; W?:"solid"|"glass" };
   objects: SceneObject[];
+  // compatibility fields used elsewhere in the app
+  units?: Units;
   notes?: string;
-  refImages?: string[]; // data URLs
+  refImages?: string[];
 };
 
+export function isSurface(o: SceneObject){ return (o.layer==="surface") || (o.kind==="table"); }
+export function defaultLayerFor(o: SceneObject): Layer {
+  if (o.wall) return "wall";
+  if (o.kind==="decal") return "wall";
+  if (o.kind==="tv" || o.kind==="whiteboard" || o.kind==="panel") return "wall";
+  if (o.kind==="ceiling_light") return "ceiling";
+  if (o.kind==="table") return "floor";
+  return "floor";
+}
+
+// ----- legacy helpers (units + default model + degClamp) -----
+export type Units = "ft" | "cm";
 export const FT_PER_CM = 0.0328084;
 export function toFt(u:Units, v:number){ return u==="ft" ? v : v*FT_PER_CM; }
 export function fromFt(u:Units, vft:number){ return u==="ft" ? vft : vft/FT_PER_CM; }
-
-// utils
 export function degClamp(v:number){ v = v % 360; return v<0 ? v+360 : v; }
 
 export function defaultYCModel(): SceneModel {
   return {
-    version: "v1",
+    name: "yc_room_v1",
     units: "ft",
     room: { width: 20, depth: 14, height: 10 },
+    wallMaterials: { E: "glass", N: "solid", S: "solid", W: "solid" },
     objects: [
       { id:"table", kind:"table", label:"table", cx:10, cy:7, w:7, d:3, h:2.5, rotation:0 },
       { id:"chairs_n1", kind:"chair", label:"chair_N1", cx:10-1.25, cy:5.5, w:1.6, d:1.6, h:1.5 },
@@ -48,11 +61,10 @@ export function defaultYCModel(): SceneModel {
       { id:"panels1", kind:"panel", label:"panel1", cx:12, cy:7, w:2, d:0.2, h:4, wall:"N", mount_h:5.5 },
       { id:"panels2", kind:"panel", label:"panel2", cx:14.5, cy:7, w:2, d:0.2, h:4, wall:"N", mount_h:5.5 },
       { id:"panels3", kind:"panel", label:"panel3", cx:17, cy:7, w:2, d:0.2, h:4, wall:"N", mount_h:5.5 },
-      { id:"decal", kind:"decal", label:"yc_decal", cx:18.8, cy:7, w:6, d:0.1, h:1, wall:"E", mount_h:4.5, decalUrl:"" }
+      { id:"decal", kind:"decal", label:"yc_decal", cx:18.8, cy:7, w:6, d:0.1, h:1, wall:"E", mount_h:4.5 }
     ],
     notes: "YC interview room baseline.",
     refImages: []
   };
 }
-
 

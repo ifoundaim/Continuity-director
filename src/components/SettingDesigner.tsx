@@ -2,8 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { SceneModel, SceneObject, defaultYCModel, Units } from "../lib/scene_model";
 import { degClamp } from "../lib/scene_model";
 import { PRESETS, applyPreset } from "../lib/presets";
-import { detectCollisions, enforceMinClearance } from "../lib/constraints";
+import { enforceMinClearance } from "../lib/constraints";
+import { detectCollisions, resolveCollisions, countErrors, countWarnings } from "../lib/collision";
+import { CLEARANCES, QUALITY, REASONS, ROOM_TEMPLATES, OBJECT_DEFAULTS } from "../lib/physics";
+import type { SceneModel, SceneObject } from "../lib/scene_model";
 import DimensionOverlay from "./DimensionOverlay";
+import CharacterLayer, { CharPlacement } from "./CharacterLayer";
+import { renderOverlayPNG } from "../lib/overlay";
+import type { CameraPose } from "../lib/camera";
 import ElevationEditor from "./ElevationEditor";
 import { exportSceneLockJSON, exportIsometricSVG } from "../lib/exporters";
 
@@ -26,8 +32,21 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   const [sel, setSel] = useState<string|null>(null);
   const [units, setUnits] = useState<Units>(model.units);
   const [scale, setScale] = useState(1);
+  const [charPlc, setCharPlc] = useState<CharPlacement[]>([]);
   const [activeTab, setActiveTab] = useState<"plan"|"elevN"|"elevS"|"elevE"|"elevW"|"iso">("plan");
+  // settings CRUD state
+  type SettingMeta = { id:string; name:string; updatedAt:number };
+  const [settings, setSettings] = useState<SettingMeta[]>([]);
+  const [activeSettingId, setActiveSettingId] = useState<string|undefined>(undefined);
+  const [currentId, setCurrentId] = useState<string|undefined>(undefined);
+  const [currentName, setCurrentName] = useState<string>("(unsaved)");
+  const [dirty, setDirty] = useState(false);
   const violations = useMemo(()=>detectCollisions(model), [model]);
+  const [collisions, setCollisions] = useState<any[]>([]);
+  const [showCollisions, setShowCollisions] = useState(true);
+  const [showWarnings, setShowWarnings] = useState(true);
+  const [showErrors, setShowErrors] = useState(true);
+  useEffect(()=>{ setCollisions(detectCollisions(model)); }, [model]);
   const containerRef = useRef<HTMLDivElement|null>(null);
   const [canvasSize, setCanvasSize] = useState<{w:number; h:number}>({ w: 1200, h: 720 });
   const [zoom, setZoom] = useState(1);
@@ -56,6 +75,7 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
 
   useEffect(()=>{ onChange?.(model); localStorage.setItem("settingDesigner:model", JSON.stringify(model)); }, [model]);
   useEffect(()=>{ const s = localStorage.getItem("settingDesigner:model"); if(s && !initial){ try{ setModel(JSON.parse(s)); }catch{} } }, []);
+  useEffect(()=>{ setDirty(true); }, [model]);
 
   useEffect(()=>{
     function onResize(){
@@ -75,6 +95,13 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   const toOriginY = ()=> (CANVAS_H - toPx(model.room.depth))/2;
   const toCanvasX = (ft:number)=> toPx(ft) + toOriginX();
   const toCanvasY = (ft:number)=> toPx(ft) + toOriginY();
+  // inverse helpers for CharacterLayer
+  const fromCanvasX = (px:number)=> (px - toOriginX())/scale;
+  const fromCanvasY = (px:number)=> (px - toOriginY())/scale;
+  const screenToCanvasX = (sx:number)=> (sx / (zoom||1)) - pan.x;
+  const screenToCanvasY = (sy:number)=> (sy / (zoom||1)) - pan.y;
+  const screenToFtX = (sx:number)=> fromCanvasX(screenToCanvasX(sx));
+  const screenToFtY = (sy:number)=> fromCanvasY(screenToCanvasY(sy));
 
   // pointer interaction
   const dragging = useRef<{id:string; mode:"move"|"resize"|"rotate"|"bubble"; lastX:number; lastY:number} | null>(null);
@@ -264,7 +291,7 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
 
   // toolbar
   function add(kind:SceneObject["kind"], name?:string){
-    const o: SceneObject = { id: uid(), kind, label: name || kind, cx: model.room.width/2, cy: model.room.depth/2, w: 2, d: 1, h: 3, rotation: 0, facing: 0, desc: "", images:[] };
+    const o: SceneObject = { id: uid(), kind, label: name || kind, cx: model.room.width/2, cy: model.room.depth/2, w: 2, d: 1, h: 3, rotation: 0, facing: 0 } as any;
     setModel(m=>({ ...m, objects:[...m.objects, o]}));
     setSel(o.id);
   }
@@ -344,9 +371,150 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
     </defs>
   );
 
+  // ----- Layout helpers -----
+  function distributeChairs(m: SceneModel): SceneModel {
+    const tables = m.objects.filter(o => (o as any).kind === "table");
+    if (!tables.length) return m;
+    const t = [...tables].sort((a,b)=> (b.w*b.d)-(a.w*a.d))[0];
+
+    const seatBack = CLEARANCES.chairBackToTable;
+    const spacing = CLEARANCES.chairToChair;
+    const chairs = m.objects.filter(o => (o as any).kind === "chair" && !(o as any).locked);
+    if (!chairs.length) return m;
+
+    const north: any[] = []; const south: any[] = [];
+    for (const c of chairs) ((c.cy <= t.cy) ? north : south).push(c);
+
+    const placeRow = (row: any[], side: "N"|"S") => {
+      const y = t.cy + (side === "N" ? -(t.d/2 + seatBack) : (t.d/2 + seatBack));
+      const n = row.length; if (!n) return;
+      const total = (n-1) * spacing; let startX = t.cx - total/2;
+      row.sort((a,b)=>a.cx-b.cx);
+      for (let i=0;i<n;i++){
+        const c = row[i];
+        c.cx = startX + i*spacing; c.cy = y; c.rotation = side === "N" ? 180 : 0;
+      }
+    };
+
+    placeRow(north, "N"); placeRow(south, "S");
+    return { ...m, objects: m.objects.map(o => {
+      const hit = [...north, ...south].find(c=>c.id===o.id);
+      return hit ? { ...o, cx: hit.cx, cy: hit.cy, rotation: hit.rotation } : o;
+    })};
+  }
+
+  function spaceWallItems(m: SceneModel): SceneModel {
+    const res = { ...m, objects: m.objects.map(o=>({ ...o })) } as SceneModel;
+    const walls: ("N"|"S"|"E"|"W")[] = ["N","S","E","W"];
+    for (const w of walls){
+      const items = res.objects.filter((o:any)=> (o.wall===w) && !(o.locked));
+      if (!items.length) continue;
+      if (w==="E"||w==="W"){
+        // distribute along Y (depth)
+        const pad = 0.5; const start = pad; const end = res.room.depth - pad;
+        items.sort((a:any,b:any)=>a.cy-b.cy);
+        const total = items.reduce((s:any,o:any)=> s + (o.d||0.2), 0);
+        const gaps = Math.max(0, end - start - total);
+        const gap = Math.max(0.5, gaps / (items.length+1));
+        let cur = start + gap;
+        for (const o of items){
+          o.cy = clamp(cur + (o.d||0.2)/2, 0, res.room.depth);
+          // ensure pinned to wall x
+          o.cx = (w==="E" ? res.room.width : 0);
+          cur += (o.d||0.2) + gap;
+        }
+      } else {
+        // N/S: distribute along X (width)
+        const pad = 0.5; const start = pad; const end = res.room.width - pad;
+        items.sort((a:any,b:any)=>a.cx-b.cx);
+        const total = items.reduce((s:any,o:any)=> s + (o.w||1), 0);
+        const gaps = Math.max(0, end - start - total);
+        const gap = Math.max(0.5, gaps / (items.length+1));
+        let cur = start + gap;
+        for (const o of items){
+          o.cx = clamp(cur + (o.w||1)/2, 0, res.room.width);
+          o.cy = (w==="N" ? 0 : res.room.depth);
+          cur += (o.w||1) + gap;
+        }
+      }
+    }
+    return res;
+  }
+
+  async function makeItValid() {
+    let working = JSON.parse(JSON.stringify(model)) as SceneModel;
+    for (let pass = 0; pass < QUALITY.maxPasses; pass++) {
+      const r = resolveCollisions(working, 8); working = r.model;
+      working = distributeChairs(working);
+      working = spaceWallItems(working);
+
+      const cols = detectCollisions(working);
+      const aisleHits = cols.filter(c => c.reason === REASONS.AISLE && (c as any).a.kind==="table" && !(c as any).a.locked);
+      if (aisleHits.length) {
+        const t:any = aisleHits[0].a; const cx = working.room.width/2, cy = working.room.depth/2;
+        t.cx = (t.cx*2 + cx)/3; t.cy = (t.cy*2 + cy)/3;
+      }
+
+      const after = detectCollisions(working);
+      const errs = countErrors(after); const warns = countWarnings(after);
+      if (errs === 0 && warns <= QUALITY.maxWarnings) {
+        setModel(working); setCollisions(after);
+        alert(`Valid: 0 errors, ${warns} warnings (≤ ${QUALITY.maxWarnings}).`);
+        return;
+      }
+    }
+    const finalCols = detectCollisions(working); setModel(working); setCollisions(finalCols);
+    alert(`Stopped after ${QUALITY.maxPasses} passes: ${countErrors(finalCols)} errors, ${countWarnings(finalCols)} warnings remain.`);
+  }
+
+  // settings CRUD helpers
+  useEffect(()=>{ refreshList(); },[]);
+  async function refreshList(){
+    try{
+      const r = await fetch("/api/settings/list"); const j = await r.json();
+      if (j.ok){ setSettings(j.list); setActiveSettingId(j.activeId); if (!currentId && j.activeId){ loadSettingDoc(j.activeId); } }
+    }catch{}
+  }
+  async function loadSettingDoc(id:string){
+    const r = await fetch(`/api/settings/get?id=${id}`); const j = await r.json();
+    if (j.ok && j.doc){ setModel(j.doc.model); setCurrentId(j.doc.id); setCurrentName(j.doc.name); setDirty(false); setSel(null); }
+  }
+  async function saveSettingDoc({ asNew=false, activate=false } = {}){
+    const name = asNew ? (prompt("Name this setting:", currentName || "YC Room") || "Untitled") : currentName;
+    const id = asNew ? undefined : currentId;
+    const r = await fetch("/api/settings/save", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ id, name, model, activate }) });
+    const j = await r.json();
+    if (j.ok){ setCurrentId(j.id); setCurrentName(name || j.id); setDirty(false); await refreshList(); if (activate) setActiveSettingId(j.id); }
+  }
+  async function removeSettingDoc(){
+    if (!currentId) return alert("Nothing to delete.");
+    if (!confirm(`Delete setting “${currentName}”?`)) return;
+    await fetch("/api/settings/delete", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ id: currentId }) });
+    setCurrentId(undefined); setCurrentName("(unsaved)"); setDirty(false);
+    await refreshList();
+  }
+  async function activateSetting(id?:string){
+    const target = id || currentId; if (!target) return alert("Save first.");
+    await fetch("/api/settings/activate", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ id: target }) });
+    setActiveSettingId(target); await refreshList();
+  }
+
   return (
     <div style={{ display:"grid", gridTemplateColumns:"1fr 320px", gap:12 }}>
       <div>
+        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8, flexWrap:"wrap" }}>
+          <strong>Setting:</strong>
+          <select value={currentId || ""} onChange={e=>{ const v = e.target.value; if (v) loadSettingDoc(v); }} style={{ minWidth:220 }}>
+            <option value="">{currentName}{dirty?" *":""}</option>
+            {settings.map(s=><option key={s.id} value={s.id}>{s.name}{activeSettingId===s.id?" (active)":""}</option>)}
+          </select>
+          <button onClick={()=>saveSettingDoc({ asNew:true })}>Save As…</button>
+          <button onClick={()=>saveSettingDoc({ asNew:false })} disabled={!dirty && !!currentId}>Save</button>
+          <button onClick={()=>{ if (!currentId) return saveSettingDoc({ asNew:true }); saveSettingDoc({ asNew:true }).then(()=>{}); }}>Duplicate</button>
+          <button onClick={()=>activateSetting()}>Activate</button>
+          <button onClick={removeSettingDoc} disabled={!currentId}>Delete</button>
+          <span style={{ marginLeft:8, color:"#9aa3b2" }}>{activeSettingId ? `Active: ${settings.find(s=>s.id===activeSettingId)?.name||activeSettingId}` : "No active setting"}</span>
+        </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8, flexWrap:"wrap" }}>
           {/* presets */}
           <select onChange={e=>{ const o = applyPreset(e.target.value); if(o){ setModel(m=>({...m, objects:[...m.objects, o]})); setSel(o.id);} e.currentTarget.selectedIndex=0; }}>
@@ -357,7 +525,42 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           </select>
           <button onClick={()=>add("decal")} title="Add decal">+ Decal</button>
           <button onClick={addCustom} title="Add custom object">+ Custom…</button>
-          <button onClick={()=>setModel(enforceMinClearance(model))}>Resolve Collisions</button>
+          <button onClick={()=>{ const r = resolveCollisions(model, 8); setModel(r.model); setCollisions(r.remaining); }}>Resolve Collisions</button>
+          <button onClick={makeItValid}>Make it valid</button>
+          <label style={{ marginLeft:8 }}>
+            <input type="checkbox" checked={showCollisions} onChange={e=>setShowCollisions(e.target.checked)} />
+            Show collisions
+          </label>
+          {showCollisions && (
+            <span style={{ marginLeft:8 }}>
+              <label><input type="checkbox" checked={showErrors} onChange={e=>setShowErrors(e.target.checked)} /> Errors</label>
+              <label style={{ marginLeft:6 }}><input type="checkbox" checked={showWarnings} onChange={e=>setShowWarnings(e.target.checked)} /> Warnings</label>
+            </span>
+          )}
+          <label style={{ marginLeft:8 }}>Room template:</label>
+          <select onChange={async e=>{
+            const v = e.target.value;
+            if (v === "standard"){
+              setModel(m => ({
+                ...m,
+                room: { ...m.room, ...ROOM_TEMPLATES.yc_interview },
+                objects: m.objects.map(o=> o.kind==="table" ? { ...o, ...OBJECT_DEFAULTS.table84x36 } : o)
+              }));
+              setTimeout(()=>makeItValid(), 0);
+            } else if (v === "compact"){
+              setModel(m => ({
+                ...m,
+                room: { ...m.room, ...ROOM_TEMPLATES.compact },
+                objects: m.objects.map(o=> o.kind==="table" ? { ...o, ...OBJECT_DEFAULTS.table72x36 } : o)
+              }));
+              setTimeout(()=>makeItValid(), 0);
+            }
+            e.currentTarget.selectedIndex = 0;
+          }}>
+            <option>(choose)</option>
+            <option value="standard">Standard (20×14 ft, 84×36 table)</option>
+            <option value="compact">Compact (18×12 ft, 72×36 table)</option>
+          </select>
           <span style={{ marginLeft:8, color:"#9aa3b2" }}>{violations.length ? `⚠ ${violations.length} collision(s)` : "✅ No collisions"}</span>
 
           <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
@@ -399,8 +602,25 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
               {Array.from({length:Math.ceil(model.room.width/GRID_FT)+1}).map((_,i)=>{ const x = toCanvasX(i*GRID_FT); return <line key={"gx"+i} x1={x} x2={x} y1={toCanvasY(0)} y2={toCanvasY(model.room.depth)} stroke="#222a38" strokeWidth={i%2===0?1:0.5} /> })}
               {Array.from({length:Math.ceil(model.room.depth/GRID_FT)+1}).map((_,i)=>{ const y = toCanvasY(i*GRID_FT); return <line key={"gy"+i} y1={y} y2={y} x1={toCanvasX(0)} x2={toCanvasX(model.room.width)} stroke="#222a38" strokeWidth={i%2===0?1:0.5} /> })}
               <rect x={toCanvasX(0)} y={toCanvasY(0)} width={toPx(model.room.width)} height={toPx(model.room.depth)} fill="none" stroke="#3a4255" strokeWidth={2} />
-              {model.objects.map(o=>{ const x = toCanvasX(o.cx) - toPx(o.w)/2; const y = toCanvasY(o.cy) - toPx(o.d)/2; const seld = sel===o.id; const rot = o.rotation || 0; return (
+              {/* Glass wall tint (E) */}
+              <rect
+                x={toCanvasX(model.room.width)-2}
+                y={toCanvasY(0)}
+                width={4}
+                height={toCanvasY(model.room.depth)-toCanvasY(0)}
+                fill="#6bd5ff"
+                opacity={0.35}
+              />
+              {/* Wall labels */}
+              <text x={(toCanvasX(0)+toCanvasX(model.room.width))/2} y={toCanvasY(0)-8} fill="#8aa6ff" fontSize={12} textAnchor="middle" opacity={0.8}>N</text>
+              <text x={(toCanvasX(0)+toCanvasX(model.room.width))/2} y={toCanvasY(model.room.depth)+14} fill="#8aa6ff" fontSize={12} textAnchor="middle" opacity={0.8}>S</text>
+              <text x={toCanvasX(0)-10} y={(toCanvasY(0)+toCanvasY(model.room.depth))/2} fill="#8aa6ff" fontSize={12} textAnchor="middle" opacity={0.8}>W</text>
+              <text x={toCanvasX(model.room.width)+32} y={(toCanvasY(0)+toCanvasY(model.room.depth))/2} fill="#8aa6ff" fontSize={12} textAnchor="middle" opacity={0.8}>E (glass)</text>
+              {model.objects.map(o=>{ const x = toCanvasX(o.cx) - toPx(o.w)/2; const y = toCanvasY(o.cy) - toPx(o.d)/2; const seld = sel===o.id; const rot = o.rotation || 0; const idsToHalo = new Set(collisions.filter((c:any)=> showCollisions && ((c.severity==="error" && showErrors) || (c.severity==="warning" && showWarnings))).flatMap((c:any)=>[c.a?.id,c.b?.id].filter(Boolean))); const isBad = idsToHalo.has(o.id); const haloColor = (collisions.find((c:any)=> (c.a?.id===o.id || c.b?.id===o.id) && c.severity==="error") ? "#ff6b6b" : "#ffb86b"); return (
                 <g key={o.id} transform={`rotate(${rot},${toCanvasX(o.cx)},${toCanvasY(o.cy)})`} onMouseDown={(e)=>{ setSel(o.id); begin(e,o.id,"move"); }}>
+                  {isBad && (
+                    <circle cx={toCanvasX(o.cx)} cy={toCanvasY(o.cy)} r={Math.max(20, (o.w+o.d)*scale*0.6)} fill="none" stroke={haloColor} strokeWidth={2} strokeDasharray="4 4" opacity={0.9}/>
+                  )}
                   <rect x={x} y={y} width={toPx(o.w)} height={toPx(o.d)} fill={seld?"#253049":"#1b2230"} stroke={seld?"#7c9cff":"#3a4255"} strokeWidth={2} rx={6} />
                   <rect x={x+toPx(o.w)-8} y={y+toPx(o.d)-8} width={14} height={14} fill="#7c9cff" rx={3} title="Resize (drag). Shift: finer grid" onMouseDown={(e)=>{ e.stopPropagation(); setSel(o.id); begin(e,o.id,"resize"); }} />
                   <text x={toCanvasX(o.cx)} y={toCanvasY(o.cy)} fill="#cbd3e1" textAnchor="middle" dy="0.35em" fontSize={12}>
@@ -412,6 +632,15 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
                   </>}
                 </g>
               ); })}
+              {/* Character markers */}
+              <CharacterLayer
+                model={model}
+                toCanvasX={toCanvasX}
+                toCanvasY={toCanvasY}
+                screenToFtX={screenToFtX}
+                screenToFtY={screenToFtY}
+                onChange={setCharPlc}
+              />
               <DimensionOverlay model={model} selected={selected} toCanvasX={toCanvasX} toCanvasY={toCanvasY} toPx={toPx} />
             </g>
           </svg>
@@ -453,6 +682,27 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
         )}
 
         <div style={{ display:"flex", gap:8, marginTop:10, flexWrap:"wrap" }}>
+          <button onClick={()=>{
+            // Preview/Export overlay for current camera
+            const camPreset = { fov_deg: 50, pos:[6,5.0,5.2] as [number,number,number], look_at:[10,7,4.8] as [number,number,number] };
+            const cam: CameraPose = { fovDeg: camPreset.fov_deg, pos:{ x:camPreset.pos[0], y:camPreset.pos[1], z:camPreset.pos[2] }, lookAt:{ x:camPreset.look_at[0], y:camPreset.look_at[1], z:camPreset.look_at[2] }, imgW:1024, imgH:576 };
+            const dataUrl = renderOverlayPNG(model, cam, charPlc.map(c=>({ name:c.name, heightCm:c.heightCm, x:c.x, y:c.y })), 1024, 576);
+            const a = document.createElement("a"); a.href = dataUrl; a.download = "overlay.png"; a.click();
+          }}>Export Overlay (current cam)</button>
+          <button onClick={async()=>{
+            const camPreset = { fov_deg: 50, pos:[6,5.0,5.2] as [number,number,number], look_at:[10,7,4.8] as [number,number,number] };
+            const cam: CameraPose = { fovDeg: camPreset.fov_deg, pos:{ x:camPreset.pos[0], y:camPreset.pos[1], z:camPreset.pos[2] }, lookAt:{ x:camPreset.look_at[0], y:camPreset.look_at[1], z:camPreset.look_at[2] }, imgW:1024, imgH:576 };
+            const overlay = renderOverlayPNG(model, cam, charPlc.map(c=>({ name:c.name, heightCm:c.heightCm, x:c.x, y:c.y })), 1024, 576);
+            const r = await fetch("/api/generate", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({
+              camera: { fov_deg: cam.fovDeg, pos:[cam.pos.x, cam.pos.y, cam.pos.z], look_at:[cam.lookAt.x, cam.lookAt.y, cam.lookAt.z] },
+              overlayBase64: overlay,
+              charPlacements: charPlc.map(c=>({ name:c.name, x:c.x, y:c.y, heightCm:c.heightCm })),
+              settingProfile: { description: model.notes || "", images_base64: model.refImages || [] }
+            })});
+            if(!r.ok){ alert(await r.text()); return; }
+            const blob = await r.blob(); const url = URL.createObjectURL(blob);
+            const w = window.open(url, "_blank"); setTimeout(()=>{ URL.revokeObjectURL(url); }, 30000);
+          }}>Generate with Overlay</button>
           <button onClick={()=>{
             const text = exportSceneLockJSON(model);
             const blob = new Blob([text], { type:"application/json" });
@@ -497,6 +747,18 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
               </select></label>
               <label>Mount H<input type="number" step={0.1} value={selected.mount_h||0} onChange={e=>updateSelected({ mount_h:+e.target.value })} /></label>
             </div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginTop:8 }}>
+              <label><input type="checkbox" checked={selected.locked||false} onChange={e=>updateSelected({ locked:e.target.checked })}/> Lock</label>
+              <label>Layer<select value={selected.layer || "floor"} onChange={e=>updateSelected({ layer:e.target.value as any })}>
+                <option>floor</option><option>surface</option><option>wall</option><option>ceiling</option>
+              </select></label>
+              <label>Attach to<select value={selected.attachTo||""} onChange={e=>updateSelected({ attachTo: (e.target.value||null) as any })}>
+                <option value="">(none)</option>
+                {model.objects.filter(p => p.id!==selected.id).map(p=><option key={p.id} value={p.id}>{p.label||p.kind}</option>)}
+              </select></label>
+              <label>Local dx<input type="number" step={0.1} value={selected.local?.dx||0} onChange={e=>updateSelected({ local:{ ...(selected.local||{dx:0,dy:0}), dx:+e.target.value }})} /></label>
+              <label>Local dy<input type="number" step={0.1} value={selected.local?.dy||0} onChange={e=>updateSelected({ local:{ ...(selected.local||{dx:0,dy:0}), dy:+e.target.value }})} /></label>
+            </div>
 
             <div style={{ marginTop:10 }}>
               <label>Description<textarea style={{ width:"100%", minHeight:80 }} value={selected.desc||""} onChange={e=>updateSelected({ desc:e.target.value })} /></label>
@@ -526,6 +788,14 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:8 }}>
             {(model.refImages||[]).map((s,i)=><img key={i} src={s} style={{ width:74, height:74, objectFit:"cover", borderRadius:8, border:"1px solid #232833" }}/>)}
           </div>
+        </div>
+        <div style={{ marginTop:8, color:"#c8d1e0", fontSize:12 }}>
+          <strong>Collisions: {collisions.length}</strong>
+          <ul style={{ maxHeight:120, overflow:"auto", paddingLeft:16 }}>
+            {collisions.map((c:any,i:number)=>(
+              <li key={i}>{c.b ? `${(c.a.label||c.a.kind)} ↔ ${(c.b.label||c.b.kind)} — ${c.reason}` : `${(c.a.label||c.a.kind)} — ${c.reason}`}</li>
+            ))}
+          </ul>
         </div>
       </div>
     </div>

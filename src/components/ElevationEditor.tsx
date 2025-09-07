@@ -29,6 +29,16 @@ export default function ElevationEditor({ model, wall, onChange, onSelect, selec
     <svg width={W} height={H} style={{ background:"#0f1217", border:"1px solid #232833", borderRadius:12 }}>
       {/* ground */}
       <line x1={pad} y1={H-pad} x2={W-pad} y2={H-pad} stroke="#3a4255"/>
+      {/* E wall glass + mullions */}
+      {wall==="E" && (
+        <>
+          <rect x={pad} y={pad} width={W-2*pad} height={H-2*pad} fill="#0f2a33" opacity={0.25} />
+          {Array.from({length:Math.floor(model.room.depth/3.5)+1}).map((_,i)=>{
+            const d = i*3.5; const x = pad + d * ((W-2*pad)/model.room.depth);
+            return <line key={i} x1={x} y1={pad} x2={x} y2={H-pad} stroke="#67c9ff" opacity={0.55}/>;
+          })}
+        </>
+      )}
       {objs.map(o=>{
         const x = toX(o), y=toY(o), w=width(o), h=height(o);
         const sel = selectedId===o.id;

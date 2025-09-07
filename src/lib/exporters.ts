@@ -22,8 +22,19 @@ export function exportIsometricSVG(model: any, angleDeg = 0): string {
   // room shell
   const room: IsoBox = { x:0, y:0, z:0, w:model.room.width, d:model.room.depth, h:model.room.height, color:"#2a3350" };
 
+  // Apply attachments for stacked/surface items
+  const byId = new Map((model.objects||[]).map((o:any)=>[o.id,o]));
+  const resolved = (model.objects||[]).map((o:any)=>{
+    if(!o.attachTo) return o;
+    const p = byId.get(o.attachTo); if(!p) return o;
+    const dx=o.local?.dx||0, dy=o.local?.dy||0;
+    const placed = { ...o, cx:p.cx+dx, cy:p.cy+dy };
+    if (o.layer==="surface" && (p.kind==="table" || p.layer==="surface")) placed.mount_h = (p.h||2.5);
+    return placed;
+  });
+
   // convert scene objects → simple iso boxes
-  const boxes: IsoBox[] = (model.objects||[]).map((o:any)=>{
+  const boxes: IsoBox[] = resolved.map((o:any)=>{
     const x = o.cx - o.w/2, y = o.cy - o.d/2, z = 0;
     const color =
       o.kind==="table"      ? "#6b86ff" :

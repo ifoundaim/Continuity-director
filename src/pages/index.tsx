@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { CharacterProfile, SettingProfile } from "../lib/types";
 import { loadProfiles, saveProfiles, loadSetting, saveSetting } from "../lib/storage";
+import { loadPlacements, positionLockText, CharPlacement } from "../lib/placements";
+import { renderOverlayPNG } from "../lib/overlay";
+import type { CameraPose } from "../lib/camera";
 
 const cameraPresets = {
   interview: { fov_deg: 50, pos: [6, 5.0, 5.2], look_at: [10, 7, 4.8] },
@@ -24,6 +27,16 @@ export default function Home() {
   const [setting, setSetting]   = useState<SettingProfile>(loadSetting<SettingProfile>({ description: "", images_base64: [] }));
   useEffect(()=>saveProfiles(profiles), [profiles]);
   useEffect(()=>saveSetting(setting), [setting]);
+  useEffect(()=>{
+    setPlacements(loadPlacements());
+    (async ()=>{
+      try{
+        const r = await fetch("/api/get-scene");
+        const j = await r.json();
+        if (j.ok) setSceneModel(j.scene);
+      } catch {}
+    })();
+  }, []);
 
   // ---------- local ui state ----------
   const [step, setStep] = useState<1|2|3|4|5|6>(1);
@@ -34,6 +47,12 @@ export default function Home() {
   const [useNearest, setUseNearest] = useState(true);
   const [cameraKey, setCameraKey] = useState<keyof typeof cameraPresets>("interview");
   const [preview, setPreview] = useState<PreviewInfo | null>(null);
+  const [useOverlayLock, setUseOverlayLock] = useState(true);
+  const [placements, setPlacements] = useState<CharPlacement[]>([]);
+  const [sceneModel, setSceneModel] = useState<any | null>(null);
+  type SettingMeta = { id:string; name:string; updatedAt:number };
+  const [settings, setSettings] = useState<SettingMeta[]>([]);
+  const [activeSettingId, setActiveSettingId] = useState<string|undefined>(undefined);
 
   // ---------- validation ----------
   const charValid = profiles.every(p => p.name.trim().length>0 && p.height_cm>0) && profiles.length>0;
@@ -66,11 +85,25 @@ export default function Home() {
     const j = await r.json(); setPreview(j);
   }, 250), [profiles]);
   useEffect(()=>{ updatePreview(profiles as any, setting, cameraKey); }, [profiles, setting, cameraKey, updatePreview]);
+  useEffect(()=>{
+    (async ()=>{
+      const r = await fetch("/api/settings/list"); const j = await r.json();
+      if (j.ok){ setSettings(j.list); setActiveSettingId(j.activeId); }
+    })();
+  }, []);
 
   // Actions
   const gen = async (preset: keyof typeof cameraPresets) => {
     setCameraKey(preset);
-    const r = await fetch("/api/generate", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ camera: cameraPresets[preset], extra: "Anime style enforced; SceneLock fixed.", profiles, settingProfile: setting, useNearestRefs: useNearest })});
+    const presetCam = cameraPresets[preset];
+    const cam: CameraPose = { fovDeg: presetCam.fov_deg, pos:{ x:presetCam.pos[0], y:presetCam.pos[1], z:presetCam.pos[2] }, lookAt:{ x:presetCam.look_at[0], y:presetCam.look_at[1], z:presetCam.look_at[2] }, imgW:1024, imgH:576 };
+    let overlayBase64: string | null = null;
+    let posLock = "";
+    if (useOverlayLock && sceneModel && placements?.length){
+      overlayBase64 = renderOverlayPNG(sceneModel, cam, placements.map(p=>({ name:p.name, heightCm:p.heightCm, x:p.x, y:p.y })), 1024, 576);
+      posLock = positionLockText(placements);
+    }
+    const r = await fetch("/api/generate", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ camera: presetCam, extra: "Anime style enforced; SceneLock fixed.", profiles, settingProfile: setting, useNearestRefs: useNearest, overlayBase64, charPlacements: placements, positionLock: posLock, settingId: activeSettingId })});
     if (!r.ok) return alert(await r.text());
     const b = await r.arrayBuffer();
     setImg(`data:image/png;base64,${Buffer.from(b).toString("base64")}`);
@@ -159,6 +192,19 @@ export default function Home() {
       <section className="card">
         <StepHeader n={2} title="Design Setting" done={settingOk} locked={step<2} />
         <p>Upload room refs and write exact details (objects, sizes, centers, spacings). This becomes the SceneLock.</p>
+        <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:10 }}>
+          <label>Setting:</label>
+          <select value={activeSettingId || ""} onChange={async e=>{
+            const id = (e.target.value || undefined) as any;
+            await fetch("/api/settings/activate", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ id }) });
+            setActiveSettingId(id);
+            const r = await fetch("/api/get-scene"); const j = await r.json(); if(j.ok) setSceneModel(j.scene);
+          }}>
+            <option value="">(fallback: yc_room_v1)</option>
+            {settings.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <a href="/designer" style={{ marginLeft:6, fontSize:12 }}>Open Setting Designer ↗</a>
+        </div>
         <textarea className="textarea" value={setting.description} onChange={e=>setSetting(s=>({ ...s, description: e.target.value }))} rows={3} placeholder="Example: YC glass wall with mullions every 3.5 ft; 84×36 in table centered at (10 ft, 7 ft); chair seat height 18 in; 65” TV at (19 ft, 7 ft); add YC decal band at mid-glass." />
         <div className="row" style={{ marginTop:8 }}>
           <input type="file" accept="image/*" multiple onChange={async e=>{
@@ -167,6 +213,15 @@ export default function Home() {
           }} />
           <span className="chip">{setting.images_base64?.length || 0} refs</span>
           <label className="inline-note"><input type="checkbox" checked={useNearest} onChange={e=>setUseNearest(e.target.checked)} /> Use nearest past refs</label>
+        </div>
+        <div style={{ display:"flex", gap:12, alignItems:"center", marginTop:8 }}>
+          <label style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <input type="checkbox" checked={useOverlayLock} onChange={e=>setUseOverlayLock(e.target.checked)} />
+            Use overlay & Position Lock
+          </label>
+          <span style={{ fontSize:12, color:"#8a93a5" }}>
+            {placements.length ? `${placements.length} placement(s) loaded from Designer` : "No placements yet (open Setting Designer → add Characters)"}
+          </span>
         </div>
         {!!setting.images_base64?.length && (
           <div className="row" style={{ marginTop:8 }}>
