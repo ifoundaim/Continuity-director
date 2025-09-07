@@ -60,6 +60,29 @@ export function objectLockText(scene: any){
   return lines.join("\n");
 }
 
+function hex(h?:string){ return (h||"").toUpperCase(); }
+export function finishesLightingText(scene: SceneModel){
+  const f = scene.finishes; const L = scene.lighting;
+  const lines:string[] = [];
+  lines.push("Finish & Lighting Lock:");
+  if (f){
+    lines.push(`- Walls: matte ${hex(f.wallHex)}; trims ${hex(f.trimHex||"#E7E4DE")}.`);
+    if (f.floor && (f.floor as any).kind === "carpet_tiles"){
+      const ft:any = f.floor as any;
+      lines.push(`- Floor: carpet tiles ${hex(ft.baseHex)}, pattern ${ft.pattern||"heather"}, tile ${ft.tileInches||24} in; accent ${hex(ft.accentHex||f.accentHex||"#FF6D00")}.`);
+    } else if (f.floor) {
+      const fc:any = f.floor as any;
+      lines.push(`- Floor: polished concrete ${hex(fc.tintHex)}; low gloss ≈${(fc.glossGU??10)} GU.`);
+    }
+    lines.push(`- Glass (E wall): tint ${hex(f.glassTintHex||"#EAF2F6")}; mullions ${hex(f.mullionHex||"#1C1F22")}.`);
+    if (f.accentHex) lines.push(`- Accent color: YC orange ${hex(f.accentHex)} — use sparingly for stripes/decals.`);
+  }
+  if (L){
+    lines.push(`- Lighting: recessed panel, ${L.cctK} K, ~${L.lux||500} lux, ${L.contrast||"neutral"} contrast; avoid harsh specular highlights.`);
+  }
+  return lines.join("\n");
+}
+
 export const shotPrompt = (
   graph: SceneGraph,
   camera: { fov_deg:number; pos:[number,number,number]; look_at:[number,number,number]},

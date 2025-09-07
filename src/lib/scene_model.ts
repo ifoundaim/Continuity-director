@@ -16,10 +16,46 @@ export type SceneObject = {
   meta?: Record<string, any>;
 };
 
+export type FinishCarpet = {
+  kind: "carpet_tiles";
+  baseHex: string;        // e.g. "#2E3135"
+  pattern?: "solid" | "heather" | "quarter-turn";
+  tileInches?: number;    // e.g. 24
+  accentHex?: string;     // stripe or scatter accent
+};
+
+export type FinishConcrete = {
+  kind: "polished_concrete";
+  tintHex: string;        // warm grey
+  glossGU?: number;       // 5–20 gloss units
+};
+
+export type FloorFinish = FinishCarpet | FinishConcrete;
+
+export type Finishes = {
+  wallHex: string;           // off-white matte
+  trimHex?: string;          // subtle base/trim if any
+  floor: FloorFinish;
+  mullionHex?: string;       // glass mullions
+  glassTintHex?: string;     // very light blue/grey
+  accentHex?: string;        // e.g. YC orange stripes/decals
+  notes?: string;            // human notes
+};
+
+export type Lighting = {
+  cctK: number;              // e.g. 4300
+  ev100?: number;            // exposure value @ ISO100 (optional descriptor)
+  lux?: number;              // ~400-600 lux typical office
+  contrast?: "soft" | "neutral" | "crisp";
+  style?: "even_panel" | "spot_key_fill";
+};
+
 export type SceneModel = {
   name?: string;
   room: { width:number; depth:number; height:number };
   wallMaterials?: { N?:"solid"|"glass"; S?:"solid"|"glass"; E?:"solid"|"glass"; W?:"solid"|"glass" };
+  finishes?: Finishes;        // NEW
+  lighting?: Lighting;        // NEW
   objects: SceneObject[];
   // compatibility fields used elsewhere in the app
   units?: Units;
@@ -51,6 +87,8 @@ export function defaultYCModel(): SceneModel {
     units: "ft",
     room: { width: 20, depth: 14, height: 10 },
     wallMaterials: { E: "glass", N: "solid", S: "solid", W: "solid" },
+    finishes: undefined,
+    lighting: undefined,
     objects: [
       { id:"table", kind:"table", label:"table", cx:10, cy:7, w:7, d:3, h:2.5, rotation:0 },
       { id:"chairs_n1", kind:"chair", label:"chair_N1", cx:10-1.25, cy:5.5, w:1.6, d:1.6, h:1.5 },

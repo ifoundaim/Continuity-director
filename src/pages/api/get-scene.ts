@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { getActiveId, getSetting } from "../../server/settings_fs";
 import { YC_DESCRIPTIONS } from "../../lib/object_descriptions";
+import { ensureDefaults } from "../../lib/finishes_presets";
 
 export default function handler(_req: NextApiRequest, res: NextApiResponse) {
   try {
@@ -28,11 +29,14 @@ export default function handler(_req: NextApiRequest, res: NextApiResponse) {
               if (!o.meta.styleTokens) o.meta.styleTokens = YC_DESCRIPTIONS[key].styleTokens;
             }
           }
-          scene.wallMaterials = { ...(scene.wallMaterials || {}), E: "glass", N: "solid", S: "solid", W: "solid" };
+          const ensured = ensureDefaults(scene.finishes, scene.lighting);
+          scene.finishes = ensured.finishes; scene.lighting = ensured.lighting;
+          scene.wallMaterials = { E: "glass", N: "solid", S: "solid", W: "solid", ...(scene.wallMaterials || {}) };
           scene.meta = {
             ...(scene.meta || {}),
             glassE: { mullionSpacingFt: 3.5, doorHasStile: true },
-            roomFinish: YC_DESCRIPTIONS.room_finish.description
+            roomFinish: YC_DESCRIPTIONS.room_finish.description,
+            preset: scene.meta?.preset || "yc_room"
           };
         } catch {}
         return res.status(200).json({ ok:true, scene, meta:{ id:active, name:doc.name }});
@@ -60,11 +64,14 @@ export default function handler(_req: NextApiRequest, res: NextApiResponse) {
           if (!o.meta.styleTokens) o.meta.styleTokens = YC_DESCRIPTIONS[key].styleTokens;
         }
       }
-      scene.wallMaterials = { ...(scene.wallMaterials || {}), E: "glass", N: "solid", S: "solid", W: "solid" };
+      const ensured = ensureDefaults(scene.finishes, scene.lighting);
+      scene.finishes = ensured.finishes; scene.lighting = ensured.lighting;
+      scene.wallMaterials = { E: "glass", N: "solid", S: "solid", W: "solid", ...(scene.wallMaterials || {}) };
       scene.meta = {
         ...(scene.meta || {}),
         glassE: { mullionSpacingFt: 3.5, doorHasStile: true },
-        roomFinish: YC_DESCRIPTIONS.room_finish.description
+        roomFinish: YC_DESCRIPTIONS.room_finish.description,
+        preset: scene.meta?.preset || "yc_room"
       };
     } catch {}
     res.status(200).json({ ok:true, scene, meta:{ id:"fallback", name:"yc_room_v1" } });
