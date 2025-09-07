@@ -1,5 +1,6 @@
 import type { SceneGraph } from "./types";
 import type { CharacterProfile } from "./types";
+import type { SceneModel } from "./scene_model";
 
 export const charactersSection = (profiles: CharacterProfile[]) => {
   const list = [...(profiles || [])].sort((a,b)=>a.name.localeCompare(b.name));
@@ -35,6 +36,28 @@ function objectLock(graph: SceneGraph) {
 
   return `Object Lock:
 ${lines.join("; ")}.`;
+}
+
+function lineInches(ft:number){ return `${Math.round(ft*12)} in`; }
+
+export function objectLockText(scene: any){
+  const lines: string[] = [];
+  // Descriptions appended for each object
+  lines.push("Descriptions:");
+  for (const o of (scene.objects || [])){
+    const label = o.label || o.kind;
+    const size = (o.w && o.d) ? `${lineInches(o.w)} × ${lineInches(o.d)}` : "";
+    const where = o.wall ? `wall ${o.wall}` : `center (${o.cx?.toFixed(2)}, ${o.cy?.toFixed(2)}) ft`;
+    const desc = (o.meta?.description ? ` — ${o.meta.description}` : "");
+    lines.push(`- ${label}: ${where}${size ? `; size ${size}` : ""}${desc}`);
+  }
+  if (scene?.meta?.glassE?.mullionSpacingFt){
+    lines.push(`- East wall glass: mullions every ${scene.meta.glassE.mullionSpacingFt} ft; slim door stile.`);
+  }
+  if (scene?.meta?.roomFinish){
+    lines.push(`- Room finish: ${scene.meta.roomFinish}`);
+  }
+  return lines.join("\n");
 }
 
 export const shotPrompt = (

@@ -25,6 +25,7 @@ export type SceneModel = {
   units?: Units;
   notes?: string;
   refImages?: string[];
+  meta?: Record<string, any>;
 };
 
 export function isSurface(o: SceneObject){ return (o.layer==="surface") || (o.kind==="table"); }

@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { YC_DESCRIPTIONS } from "../lib/object_descriptions";
 
 const ROOT = path.join(process.cwd(), ".cache", "settings");
 const INDEX = path.join(ROOT, "index.json"); // { activeId?: string }
@@ -40,6 +41,16 @@ export function getSetting(id: string){
 
 export function saveSetting(id: string, name: string, model: any){
   ensureRoot();
+  try {
+    for (const o of model.objects ?? []) {
+      const mapKey = YC_DESCRIPTIONS[(o?.kind||"") as string] ? o.kind : undefined;
+      if (mapKey) {
+        o.meta = o.meta || {};
+        if (!o.meta.description) o.meta.description = YC_DESCRIPTIONS[mapKey].description;
+        if (!o.meta.styleTokens) o.meta.styleTokens = YC_DESCRIPTIONS[mapKey].styleTokens;
+      }
+    }
+  } catch {}
   const p = path.join(ROOT, `${id}.json`);
   const data = { id, name, model };
   fs.writeFileSync(p, JSON.stringify(data, null, 2));

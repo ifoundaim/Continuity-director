@@ -14,7 +14,7 @@ export default function CharacterLayer({
 }){
   // Start empty on first render to avoid SSR hydration mismatch; load after mount
   const [chars, setChars] = useState<CharPlacement[]>([]);
-  useEffect(()=>{ setChars(loadPlacements()); }, []);
+  useEffect(()=>{ const L = loadPlacements().map(p=>({ color: "hsl(200,80%,60%)", ...p })); setChars(L as any); }, []);
   useEffect(()=>{ onChange(chars); savePlacements(chars); }, [chars]);
 
   function add(){ 

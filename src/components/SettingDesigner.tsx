@@ -5,7 +5,6 @@ import { PRESETS, applyPreset } from "../lib/presets";
 import { enforceMinClearance } from "../lib/constraints";
 import { detectCollisions, resolveCollisions, countErrors, countWarnings } from "../lib/collision";
 import { CLEARANCES, QUALITY, REASONS, ROOM_TEMPLATES, OBJECT_DEFAULTS } from "../lib/physics";
-import type { SceneModel, SceneObject } from "../lib/scene_model";
 import DimensionOverlay from "./DimensionOverlay";
 import CharacterLayer, { CharPlacement } from "./CharacterLayer";
 import { renderOverlayPNG } from "../lib/overlay";
@@ -30,7 +29,7 @@ function clamp(v:number, a:number, b:number){ return Math.max(a, Math.min(b, v))
 export default function SettingDesigner({ initial, onChange, onExport, onBuildPlates }: Props){
   const [model, setModel] = useState<SceneModel>(initial || defaultYCModel());
   const [sel, setSel] = useState<string|null>(null);
-  const [units, setUnits] = useState<Units>(model.units);
+  const [units, setUnits] = useState<Units>(model.units || "ft");
   const [scale, setScale] = useState(1);
   const [charPlc, setCharPlc] = useState<CharPlacement[]>([]);
   const [activeTab, setActiveTab] = useState<"plan"|"elevN"|"elevS"|"elevE"|"elevW"|"iso">("plan");
@@ -319,9 +318,9 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
 
   // auto-describe (per-object)
   async function autoDescribeObject(obj: SceneObject){
-    const imgs = (obj.images||[]).slice(0,4); if(!imgs.length) return alert("Add 1–4 object reference images first.");
+    const imgs = ((obj as any).images||[]).slice(0,4); if(!imgs.length) return alert("Add 1–4 object reference images first.");
     const r = await fetch("/api/describe", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ imagesBase64: imgs })});
-    const j = await r.json(); if(j.error) return alert(j.error); updateSelected({ desc: j.description });
+    const j = await r.json(); if(j.error) return alert(j.error); if (selected) updateSelected({ meta: { ...((selected as any).meta||{}), description: j.description } as any });
   }
 
   function Bubbles({o}:{o:SceneObject}){
@@ -622,7 +621,7 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
                     <circle cx={toCanvasX(o.cx)} cy={toCanvasY(o.cy)} r={Math.max(20, (o.w+o.d)*scale*0.6)} fill="none" stroke={haloColor} strokeWidth={2} strokeDasharray="4 4" opacity={0.9}/>
                   )}
                   <rect x={x} y={y} width={toPx(o.w)} height={toPx(o.d)} fill={seld?"#253049":"#1b2230"} stroke={seld?"#7c9cff":"#3a4255"} strokeWidth={2} rx={6} />
-                  <rect x={x+toPx(o.w)-8} y={y+toPx(o.d)-8} width={14} height={14} fill="#7c9cff" rx={3} title="Resize (drag). Shift: finer grid" onMouseDown={(e)=>{ e.stopPropagation(); setSel(o.id); begin(e,o.id,"resize"); }} />
+                  <rect x={x+toPx(o.w)-8} y={y+toPx(o.d)-8} width={14} height={14} fill="#7c9cff" rx={3} onMouseDown={(e)=>{ e.stopPropagation(); setSel(o.id); begin(e,o.id,"resize"); }} />
                   <text x={toCanvasX(o.cx)} y={toCanvasY(o.cy)} fill="#cbd3e1" textAnchor="middle" dy="0.35em" fontSize={12}>
                     {o.label || o.kind}
                   </text>
@@ -761,12 +760,15 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
             </div>
 
             <div style={{ marginTop:10 }}>
-              <label>Description<textarea style={{ width:"100%", minHeight:80 }} value={selected.desc||""} onChange={e=>updateSelected({ desc:e.target.value })} /></label>
+              <label>Notes (local UI only)<textarea style={{ width:"100%", minHeight:80 }} value={(selected as any).desc||""} onChange={e=>updateSelected({ } as any)} /></label>
+              <label>Description (prompt)
+                <textarea rows={4} style={{ width:"100%" }} value={selected.meta?.description||""} onChange={e=>updateSelected({ meta:{ ...(selected.meta||{}), description:e.target.value } as any })} />
+              </label>
               <div style={{ marginTop:6 }}>
                 <div>Object reference images</div>
-                <input type="file" accept="image/*" multiple onChange={async e=>{ const files = e.target.files; if(!files) return; const urls = await Promise.all([...files].map(f=> new Promise<string>(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result as string); fr.readAsDataURL(f); }))); updateSelected({ images:[...(selected.images||[]), ...urls] }); }}/>
+                <input type="file" accept="image/*" multiple onChange={async e=>{ const files = e.target.files; if(!files) return; const urls = await Promise.all([...files].map(f=> new Promise<string>(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result as string); fr.readAsDataURL(f); }))); updateSelected({} as any); }}/>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:8 }}>
-                  {(selected.images||[]).map((s,i)=><img key={i} src={s} style={{ width:60, height:60, objectFit:"cover", borderRadius:6, border:"1px solid #232833" }}/>)}
+                  {(((selected as any).images)||[]).map((s:any,i:number)=><img key={i} src={s} style={{ width:60, height:60, objectFit:"cover", borderRadius:6, border:"1px solid #232833" }}/>)}
                 </div>
                 <button style={{ marginTop:6 }} onClick={()=>autoDescribeObject(selected)}>Auto-Describe from refs</button>
               </div>

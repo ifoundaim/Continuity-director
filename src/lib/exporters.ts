@@ -26,9 +26,9 @@ export function exportIsometricSVG(model: any, angleDeg = 0): string {
   const byId = new Map((model.objects||[]).map((o:any)=>[o.id,o]));
   const resolved = (model.objects||[]).map((o:any)=>{
     if(!o.attachTo) return o;
-    const p = byId.get(o.attachTo); if(!p) return o;
+    const p:any = byId.get(o.attachTo); if(!p) return o;
     const dx=o.local?.dx||0, dy=o.local?.dy||0;
-    const placed = { ...o, cx:p.cx+dx, cy:p.cy+dy };
+    const placed:any = { ...o, cx:(p.cx||0)+dx, cy:(p.cy||0)+dy };
     if (o.layer==="surface" && (p.kind==="table" || p.layer==="surface")) placed.mount_h = (p.h||2.5);
     return placed;
   });
