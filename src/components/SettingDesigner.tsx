@@ -12,6 +12,7 @@ import type { CameraPose } from "../lib/camera";
 import ElevationEditor from "./ElevationEditor";
 import { exportSceneLockJSON, exportIsometricSVG } from "../lib/exporters";
 import { YC_DESCRIPTIONS } from "../lib/object_descriptions";
+import { PRESETS as FIN_PRESETS } from "../lib/finishes_presets";
 
 type Props = {
   initial?: SceneModel;
@@ -61,6 +62,9 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   const [elevZoom, setElevZoom] = useState(1);
   const [elevPan, setElevPan] = useState({ x:0, y:0 });
   const lastTouchesElev = useRef<{d:number; cx:number; cy:number} | null>(null);
+  const [finRefFiles, setFinRefFiles] = useState<FileList|null>(null);
+  const [busyFin, setBusyFin] = useState(false);
+  const [paletteUrl, setPaletteUrl] = useState<string | null>(null);
 
   const CANVAS_W = canvasSize.w || CANVAS_W_FALLBACK;
   const CANVAS_H = canvasSize.h || CANVAS_H_FALLBACK;
@@ -371,6 +375,29 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
     </defs>
   );
 
+  function FinishesActions(){
+    return (
+      <div style={{ gridColumn:"1 / span 6", display:"flex", gap:8, alignItems:"center", marginTop:8 }}>
+        <input type="file" accept="image/*" multiple onChange={e=>setFinRefFiles(e.target.files)} />
+        <button disabled={!finRefFiles || busyFin} onClick={async ()=>{
+          if (!finRefFiles) return; setBusyFin(true);
+          const arr = await Promise.all(Array.from(finRefFiles).map(async f=>{
+            const buf = await f.arrayBuffer(); return Buffer.from(buf as any).toString("base64");
+          }));
+          const r = await fetch("/api/interpret/finishes", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ imagesBase64: arr })}).then(r=>r.json());
+          if (r.finishes) setModel(m=>({ ...m, finishes: r.finishes }));
+          if (r.lighting) setModel(m=>({ ...m, lighting: r.lighting }));
+          setBusyFin(false);
+        }}>{busyFin ? "Interpreting…" : "Auto-interpret from refs"}</button>
+        <button onClick={async ()=>{
+          const r = await fetch("/api/palette", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ scene: model })}).then(r=>r.json());
+          if (r?.dataUrl){ setPaletteUrl(r.dataUrl); const a=document.createElement("a"); a.href=r.dataUrl; a.download=`${(model.name||"scene").replace(/\s+/g,"_")}_palette.svg`; a.click(); }
+        }}>Generate Palette Card</button>
+        {paletteUrl && <span style={{fontSize:12,opacity:0.8}}>Palette generated ✓</span>}
+      </div>
+    );
+  }
+
   // ----- Layout helpers -----
   function distributeChairs(m: SceneModel): SceneModel {
     const tables = m.objects.filter(o => (o as any).kind === "table");
@@ -570,6 +597,124 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
             <button onClick={()=>{ localStorage.removeItem("settingDesigner:model"); setModel(defaultYCModel()); }}>Reset</button>
           </div>
         </div>
+
+        <fieldset style={{ margin:"6px 0", border:"1px solid #333", padding:"8px", borderRadius:6 }}>
+          <legend>Finishes & Lighting</legend>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(6, minmax(120px, 1fr))", gap:8 }}>
+            <div>
+              <label>Preset</label>
+              <select
+                value={(model.meta?.preset)||"yc_room"}
+                onChange={(e)=> {
+                  const p = FIN_PRESETS[e.target.value as keyof typeof FIN_PRESETS];
+                  if (!p) return;
+                  setModel(m=>({ ...m, finishes: p.finishes, lighting: p.lighting, meta:{ ...(m.meta||{}), preset: e.target.value } }));
+                }}>
+                <option value="yc_room">YC room</option>
+                <option value="neutral_office">Neutral office</option>
+              </select>
+            </div>
+            <div>
+              <label>Wall</label>
+              <input type="color" value={model.finishes?.wallHex||"#F7F6F2"}
+                onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ floor:{ kind:"carpet_tiles", baseHex:"#2E3135" } as any }), wallHex: e.target.value } as any }))}/>
+            </div>
+            <div>
+              <label>Mullions</label>
+              <input type="color" value={model.finishes?.mullionHex||"#1C1F22"}
+                onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ floor:{ kind:"carpet_tiles", baseHex:"#2E3135" } as any }), mullionHex: e.target.value } as any }))}/>
+            </div>
+            <div>
+              <label>Glass tint</label>
+              <input type="color" value={model.finishes?.glassTintHex||"#EAF2F6"}
+                onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ floor:{ kind:"carpet_tiles", baseHex:"#2E3135" } as any }), glassTintHex: e.target.value } as any }))}/>
+            </div>
+            <div>
+              <label>Accent</label>
+              <input type="color" value={model.finishes?.accentHex||"#FF6D00"}
+                onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ floor:{ kind:"carpet_tiles", baseHex:"#2E3135" } as any }), accentHex: e.target.value } as any }))}/>
+            </div>
+            <div>
+              <label>Floor type</label>
+              <select
+                value={model.finishes?.floor?.kind||"carpet_tiles"}
+                onChange={(e)=>{
+                  const kind = e.target.value as any;
+                  setModel(m=>{
+                    const next:any = { ...(m.finishes||{}) };
+                    next.floor = kind==="polished_concrete"
+                      ? { kind, tintHex: "#CFCFCF", glossGU: 10 }
+                      : { kind, baseHex:"#2E3135", pattern:"heather", tileInches:24, accentHex: "#FF6D00" };
+                    return { ...m, finishes: next };
+                  });
+                }}>
+                <option value="carpet_tiles">Carpet tiles</option>
+                <option value="polished_concrete">Polished concrete</option>
+              </select>
+            </div>
+            {model.finishes && model.finishes.floor && (model.finishes.floor as any).kind==="carpet_tiles" ? (
+              <>
+                <div>
+                  <label>Carpet base</label>
+                  <input type="color" value={(model.finishes!.floor as any).baseHex}
+                    onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), baseHex: e.target.value } as any } as any }))}/>
+                </div>
+                <div>
+                  <label>Pattern</label>
+                  <select
+                    value={(model.finishes!.floor as any).pattern || "heather"}
+                    onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), pattern: e.target.value as any } as any } as any }))}>
+                    <option>solid</option><option>heather</option><option>quarter-turn</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Tile (in)</label>
+                  <input type="number" min={12} step={12} value={(model.finishes!.floor as any).tileInches||24}
+                    onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), tileInches: +e.target.value } as any } as any }))}/>
+                </div>
+                <div>
+                  <label>Carpet accent</label>
+                  <input type="color" value={(model.finishes!.floor as any).accentHex || "#FF6D00"}
+                    onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), accentHex: e.target.value } as any } as any }))}/>
+                </div>
+              </>
+            ) : (model.finishes && model.finishes.floor ? (
+              <>
+                <div>
+                  <label>Concrete tint</label>
+                  <input type="color" value={(model.finishes!.floor as any).tintHex}
+                    onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), tintHex: e.target.value } as any } as any }))}/>
+                </div>
+                <div>
+                  <label>Gloss (GU)</label>
+                  <input type="number" min={0} max={40} step={1} value={(model.finishes!.floor as any).glossGU ?? 10}
+                    onChange={e=>setModel(m=>({ ...m, finishes:{ ...(m.finishes||{ wallHex:"#F7F6F2" } as any), floor:{ ...(m.finishes!.floor as any), glossGU: +e.target.value } as any } as any }))}/>
+                </div>
+              </>
+            ) : null}
+
+            <div>
+              <label>CCT (K)</label>
+              <input type="number" min={3000} max={6500} step={50} value={model.lighting?.cctK || 4300}
+                onChange={e=>setModel(m=>({ ...m, lighting:{ ...(m.lighting||{}), cctK: +e.target.value }}))}/>
+            </div>
+            <div>
+              <label>Lux</label>
+              <input type="number" min={200} max={1000} step={50} value={model.lighting?.lux || 500}
+                onChange={e=>setModel(m=>({ ...m, lighting:{ ...(m.lighting||{ cctK: 4300 }), lux: +e.target.value } as any }))}/>
+            </div>
+            <div>
+              <label>Contrast</label>
+              <select value={model.lighting?.contrast || "neutral"}
+                onChange={e=>setModel(m=>({ ...m, lighting:{ ...(m.lighting||{ cctK: 4300 }), contrast: e.target.value as any } as any }))}>
+                <option>soft</option><option>neutral</option><option>crisp</option>
+              </select>
+            </div>
+
+            {/* Auto-interpret + Palette */}
+            <FinishesActions />
+          </div>
+        </fieldset>
 
         <div style={{ display:"flex", gap:8, marginBottom:8 }}>
           {(["plan","elevN","elevS","elevE","elevW","iso"] as const).map(t=> (
