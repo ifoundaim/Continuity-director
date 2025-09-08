@@ -58,6 +58,8 @@ export default function Home() {
   const [settings, setSettings] = useState<SettingMeta[]>([]);
   const [activeSettingId, setActiveSettingId] = useState<string|undefined>(undefined);
   const [assistantMsg, setAssistantMsg] = useState("");
+  const [charBusy, setCharBusy] = useState<Record<string, boolean>>({});
+  const [settingDescBusy, setSettingDescBusy] = useState(false);
   const [usageRemaining, setUsageRemaining] = useState<number|undefined>(undefined);
   const [shotbook, setShotbook] = useState<{ id:string; camera:any; created_at:number; file:string }[]>([]);
   const [buildStatus, setBuildStatus] = useState<{ running:boolean; itemsDone:number; lastMessage:string|null }|null>(null);
@@ -196,10 +198,12 @@ export default function Home() {
                 const imgs = await uploadFiles(e.target.files);
                 updateProfile(p.id, { images_base64: [...(p.images_base64||[]), ...imgs] });
               }} />
-              <button className="btn" onClick={async ()=>{
+              <button className="btn" disabled={!!charBusy[p.id]} onClick={async ()=>{
                 if(!(p.images_base64||[]).length) return alert("Upload 1–4 refs first.");
+                setCharBusy(b=>({ ...b, [p.id]: true }));
                 try { const d = await autoDescribe(p.images_base64!); updateProfile(p.id, { description: d }); } catch(e:any){ alert(e.message); }
-              }}>Auto-Describe</button>
+                finally { setCharBusy(b=>({ ...b, [p.id]: false })); }
+              }}>{charBusy[p.id] ? "Describing…" : "Auto-Describe"}</button>
               <span className="chip">{p.images_base64?.length||0} refs</span>
             </div>
             {!!p.images_base64?.length && (
@@ -235,8 +239,9 @@ export default function Home() {
         </div>
         <textarea className="textarea" value={setting.description} onChange={e=>setSetting(s=>({ ...s, description: e.target.value }))} rows={3} placeholder="Example: YC glass wall with mullions every 3.5 ft; 84×36 in table centered at (10 ft, 7 ft); chair seat height 18 in; 65” TV at (19 ft, 7 ft); add YC decal band at mid-glass." />
         <div className="row" style={{ marginTop:6 }}>
-          <button className="btn" onClick={async()=>{
+          <button className="btn" disabled={settingDescBusy} onClick={async()=>{
             try{
+              setSettingDescBusy(true);
               let modelForDesc = sceneModel;
               // Always fetch fresh active scene to reflect current dropdown selection
               const r1 = await fetch("/api/get-scene"); const j1 = await r1.json(); if(j1.ok){ setSceneModel(j1.scene); modelForDesc = j1.scene; }
@@ -244,7 +249,8 @@ export default function Home() {
               const j = await r.json(); if(!j?.text) return alert(j.error||"Describe failed");
               setSetting(s=>({ ...s, description: [s.description, j.text].filter(Boolean).join("\n\n") }));
             } catch(e:any){ alert(e?.message||"Failed to describe"); }
-          }}>Auto-Describe Setting</button>
+            finally { setSettingDescBusy(false); }
+          }}>{settingDescBusy ? "Describing Setting…" : "Auto-Describe Setting"}</button>
         </div>
         <div className="row" style={{ marginTop:8 }}>
           <input type="file" accept="image/*" multiple onChange={async e=>{
