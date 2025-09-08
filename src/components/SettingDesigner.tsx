@@ -588,7 +588,7 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   }
   async function removeSettingDoc(){
     if (!currentId) return alert("Nothing to delete.");
-    if (!confirm(`Delete setting “${currentName}”?`)) return;
+    if (!confirm(`Delete setting " ${currentName}"?`)) return;
     await fetch("/api/settings/delete", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ id: currentId }) });
     setCurrentId(undefined); setCurrentName("(unsaved)"); setDirty(false);
     await refreshList();
@@ -641,7 +641,7 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           <summary>Room template</summary>
           <div className="section-body">
             <label>Room template: </label>
-            <select onChange={async e=>{ const v = e.target.value; if (v === "standard"){ setModel(m => ({ ...m, room: { ...m.room, ...ROOM_TEMPLATES.yc_interview }, objects: m.objects.map(o=> o.kind==="table" ? { ...o, ...OBJECT_DEFAULTS.table84x36 } : o) })); setTimeout(()=>makeItValid(), 0); } else if (v === "compact"){ setModel(m => ({ ...m, room: { ...m.room, ...ROOM_TEMPLATES.compact }, objects: m.objects.map(o=> o.kind==="table" ? { ...o, ...OBJECT_DEFAULTS.table72x36 } : o) })); setTimeout(()=>makeItValid(), 0); } e.currentTarget.selectedIndex = 0; }}>
+            <select onChange={async e=>{ const v = e.target.value; if (v === "standard"){ setModel(m => ({ ...m, room: { ...ROOM_TEMPLATES.yc_interview }, objects: m.objects.map(o=> o.kind==="table" ? { ...o, ...OBJECT_DEFAULTS.table84x36 } : o) })); setTimeout(()=>makeItValid(), 0); } else if (v === "compact"){ setModel(m => ({ ...m, room: { ...ROOM_TEMPLATES.compact }, objects: m.objects.map(o=> o.kind==="table" ? { ...o, ...OBJECT_DEFAULTS.table72x36 } : o) })); setTimeout(()=>makeItValid(), 0); } e.currentTarget.selectedIndex = 0; }}>
               <option>(choose)</option>
               <option value="standard">Standard (20×14 ft, 84×36 table)</option>
               <option value="compact">Compact (18×12 ft, 72×36 table)</option>
@@ -1027,6 +1027,8 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
                 const found = model.objects.find(o=>o.id===id);
                 if(!found) return;
                 setLabelEdit({ id, x, y, value: found.label || found.kind });
+              }} onDrag={(id, cx, cy)=>{
+                setModel(m=>({ ...m, objects: m.objects.map(o=> o.id===id ? { ...o, cx, cy } : o ) }));
               }} />
             </div>
             {labelEdit && (

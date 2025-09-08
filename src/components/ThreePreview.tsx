@@ -6,9 +6,9 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { SceneModel } from "../lib/scene_model";
 
-type Props = { model: SceneModel; width: number; height: number; onPick?: (id:string)=>void; onEditLabel?: (id:string, clientX:number, clientY:number)=>void };
+type Props = { model: SceneModel; width: number; height: number; onPick?: (id:string)=>void; onEditLabel?: (id:string, clientX:number, clientY:number)=>void; onDrag?: (id:string, cx:number, cy:number)=>void };
 
-export default function ThreePreview({ model, width, height, onPick, onEditLabel }: Props){
+export default function ThreePreview({ model, width, height, onPick, onEditLabel, onDrag }: Props){
   const mountRef = useRef<HTMLDivElement|null>(null);
 
   useEffect(()=>{
@@ -73,6 +73,8 @@ export default function ThreePreview({ model, width, height, onPick, onEditLabel
     }
 
     const pickables: THREE.Object3D[] = [];
+    const idToMesh: Record<string, THREE.Object3D & { userData: any }> = {};
+    const idToLabel: Record<string, THREE.Sprite & { userData: any }> = {};
 
     // objects
     for(const o of model.objects){
@@ -83,34 +85,38 @@ export default function ThreePreview({ model, width, height, onPick, onEditLabel
         const w = o.w||0.2; const d = (o.d||0.2);
         let mx = toX(o.cx - w/2), mz = toZ(o.cy - d/2);
         const m = addBox(mx, y, mz, w, h, d, 0x6b88ff);
-        (m as any).userData.id = o.id; pickables.push(m);
+        (m as any).userData = { ...(m as any).userData, id: o.id, layer: L, w, d, h, baseY: y };
+        idToMesh[o.id] = m as any; pickables.push(m);
         const label = labelFor(o.label || o.kind);
         label.position.set(toX(o.cx), y + h + 0.4, toZ(o.cy)); spriteGroup.add(label);
-        (label as any).userData.id = o.id; pickables.push(label);
+        (label as any).userData = { id: o.id }; idToLabel[o.id] = label as any; pickables.push(label);
       } else if (L === "ceiling"){
         const w = o.w||1, d = o.d||1, h = o.h||0.2;
         const y = (room.height - (h));
         const m = addBox(toX(o.cx - w/2), y, toZ(o.cy - d/2), w, h, d, 0xfff0aa);
-        (m as any).userData.id = o.id; pickables.push(m);
+        (m as any).userData = { ...(m as any).userData, id: o.id, layer: L, w, d, h, baseY: y };
+        idToMesh[o.id] = m as any; pickables.push(m);
         const label = labelFor(o.label || o.kind);
         label.position.set(toX(o.cx), y + h + 0.4, toZ(o.cy)); spriteGroup.add(label);
-        (label as any).userData.id = o.id; pickables.push(label);
+        (label as any).userData = { id: o.id }; idToLabel[o.id] = label as any; pickables.push(label);
       } else if (L === "surface"){
         const w = o.w||0.5, d = o.d||0.5, h = o.h||0.2;
         const y = 2.5; // approx tabletop
         const m = addBox(toX(o.cx - w/2), y, toZ(o.cy - d/2), w, h, d, 0x90e0c6);
-        (m as any).userData.id = o.id; pickables.push(m);
+        (m as any).userData = { ...(m as any).userData, id: o.id, layer: L, w, d, h, baseY: y };
+        idToMesh[o.id] = m as any; pickables.push(m);
         const label = labelFor(o.label || o.kind);
         label.position.set(toX(o.cx), y + h + 0.4, toZ(o.cy)); spriteGroup.add(label);
-        (label as any).userData.id = o.id; pickables.push(label);
+        (label as any).userData = { id: o.id }; idToLabel[o.id] = label as any; pickables.push(label);
       } else {
         // floor objects
         const w = o.w||1, d = o.d||1, h = o.h||1;
         const y = 0; const mesh = addBox(toX(o.cx - w/2), y, toZ(o.cy - d/2), w, h, d, 0x7aa2ff);
-        (mesh as any).userData.id = o.id; pickables.push(mesh);
+        (mesh as any).userData = { ...(mesh as any).userData, id: o.id, layer: L, w, d, h, baseY: y };
+        idToMesh[o.id] = mesh as any; pickables.push(mesh);
         const label = labelFor(o.label || o.kind);
         label.position.set(toX(o.cx), y + h + 0.4, toZ(o.cy)); spriteGroup.add(label);
-        (label as any).userData.id = o.id; pickables.push(label);
+        (label as any).userData = { id: o.id }; idToLabel[o.id] = label as any; pickables.push(label);
       }
     }
 
@@ -129,10 +135,17 @@ export default function ThreePreview({ model, width, height, onPick, onEditLabel
 
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
-    function onClick(ev: MouseEvent){
+    let draggingId: string | null = null;
+    let lastDragCx = 0, lastDragCy = 0;
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0); // y=0
+    const surfacePlane = new THREE.Plane(new THREE.Vector3(0,1,0), -2.5); // y=2.5
+    function setMouse(ev: MouseEvent){
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    }
+    function onClick(ev: MouseEvent){
+      setMouse(ev);
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObjects(pickables, true);
       if(intersects.length){
@@ -142,9 +155,7 @@ export default function ThreePreview({ model, width, height, onPick, onEditLabel
       }
     }
     function onDblClick(ev: MouseEvent){
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      setMouse(ev);
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObjects(pickables, true);
       if(intersects.length){
@@ -154,8 +165,39 @@ export default function ThreePreview({ model, width, height, onPick, onEditLabel
         if (isLabel && id && onEditLabel) onEditLabel(id, ev.clientX, ev.clientY);
       }
     }
+    function onMouseDown(ev: MouseEvent){
+      setMouse(ev);
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(pickables, true);
+      if(intersects.length){
+        let obj: any = intersects[0].object; let id: string | null = null;
+        while(obj){ if (obj.userData && obj.userData.id){ id = String(obj.userData.id); break; } obj = obj.parent; }
+        if (id && idToMesh[id]){ draggingId = id; (controls as any).enabled = false; }
+      }
+    }
+    function onMouseMove(ev: MouseEvent){
+      if (!draggingId) return;
+      setMouse(ev); raycaster.setFromCamera(mouse, camera);
+      const mesh = idToMesh[draggingId]; if(!mesh) return;
+      const layer = (mesh as any).userData.layer as string;
+      const plane = (layer === "surface") ? surfacePlane : groundPlane;
+      const pt = new THREE.Vector3();
+      raycaster.ray.intersectPlane(plane, pt);
+      // clamp into room bounds
+      lastDragCx = Math.max(0, Math.min(room.width, pt.x));
+      lastDragCy = Math.max(0, Math.min(room.depth, pt.z));
+      const w = (mesh as any).userData.w || 1; const d = (mesh as any).userData.d || 1; const h = (mesh as any).userData.h || 1; const y = (mesh as any).userData.baseY || 0;
+      mesh.position.set(lastDragCx, y + h/2, lastDragCy);
+      const label = idToLabel[draggingId]; if(label){ label.position.set(lastDragCx, y + h + 0.4, lastDragCy); }
+    }
+    function onMouseUp(){
+      if (draggingId){ if (onDrag) onDrag(draggingId, lastDragCx, lastDragCy); draggingId = null; (controls as any).enabled = true; }
+    }
     renderer.domElement.addEventListener('click', onClick);
     renderer.domElement.addEventListener('dblclick', onDblClick);
+    renderer.domElement.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
 
     const animate = ()=>{ requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); };
     animate();
@@ -167,7 +209,7 @@ export default function ThreePreview({ model, width, height, onPick, onEditLabel
     }
     window.addEventListener("resize", onResize);
 
-    return ()=>{ renderer.domElement.removeEventListener('click', onClick); renderer.domElement.removeEventListener('dblclick', onDblClick); window.removeEventListener("resize", onResize); controls.dispose(); renderer.dispose(); };
+    return ()=>{ renderer.domElement.removeEventListener('click', onClick); renderer.domElement.removeEventListener('dblclick', onDblClick); renderer.domElement.removeEventListener('mousedown', onMouseDown); window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); window.removeEventListener("resize", onResize); controls.dispose(); renderer.dispose(); };
   }, [model, width, height]);
 
   return <div ref={mountRef} style={{ width, height }} />;
