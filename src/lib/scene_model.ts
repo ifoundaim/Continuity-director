@@ -105,8 +105,16 @@ export function defaultYCModel(): SceneModel {
     units: "ft",
     room: { width: 20, depth: 14, height: 10 },
     wallMaterials: { E: "glass", N: "solid", S: "solid", W: "solid" },
-    finishes: undefined,
-    lighting: undefined,
+    finishes: {
+      wallHex: "#F7F6F2",
+      trimHex: "#E7E4DE",
+      floor: { kind: "carpet_tiles", baseHex: "#2E3135", pattern: "heather", tileInches: 24, accentHex: "#FF6D00" },
+      mullionHex: "#1C1F22",
+      glassTintHex: "#EAF2F6",
+      accentHex: "#FF6D00",
+      notes: "YC aesthetic: clean, modern, minimal; YC orange used sparingly as stripe/decal."
+    },
+    lighting: { cctK: 4300, lux: 500, contrast: "neutral", style: "even_panel" },
     objects: (function(){
       const roomW = 20, roomD = 14; // mirrors ROOM_TEMPLATES.yc_interview
       const table = { id:"table", kind:"table", label:"table", cx:10, cy:7, w:7, d:3, h:2.5, rotation:0, layer:"floor" } as SceneObject;

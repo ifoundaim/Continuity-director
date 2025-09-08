@@ -16,7 +16,7 @@ import dynamic from "next/dynamic";
 const ThreePreview = dynamic(()=>import("./ThreePreview"), { ssr:false });
 import { exportSceneLockJSON, exportIsometricSVG } from "../lib/exporters";
 import { YC_DESCRIPTIONS } from "../lib/object_descriptions";
-import { PRESETS as FIN_PRESETS } from "../lib/finishes_presets";
+import { PRESETS as FIN_PRESETS, ensureDefaults as ensureFinishDefaults } from "../lib/finishes_presets";
 
 type Props = {
   initial?: SceneModel;
@@ -383,8 +383,17 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   // auto-describe (per-object)
   async function autoDescribeObject(obj: SceneObject){
     const imgs = ((obj as any).images||[]).slice(0,4); if(!imgs.length) return alert("Add 1–4 object reference images first.");
-    const r = await fetch("/api/describe", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ imagesBase64: imgs })});
-    const j = await r.json(); if(j.error) return alert(j.error); if (selected) updateSelected({ meta: { ...((selected as any).meta||{}), description: j.description } as any });
+    const r = await fetch("/api/describe_object", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ imagesBase64: imgs })});
+    const j = await r.json(); if(j.error) return alert(j.error);
+    if (selected) updateSelected({ meta: { ...((selected as any).meta||{}), description: j.description }, label: j.label || (selected.label||selected.kind) } as any);
+    // Also attempt size auto-interpretation
+    try {
+      const s = await fetch("/api/object_size", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ imagesBase64: imgs, hint: (obj.label||obj.kind||"") })}).then(r=>r.json());
+      if (s?.size_ft) {
+        updateSelected({ w: s.size_ft.w ?? (selected as any).w, d: s.size_ft.d ?? (selected as any).d, h: s.size_ft.h ?? (selected as any).h } as any);
+        if (s?.label && !obj.label) updateSelected({ label: s.label } as any);
+      }
+    } catch {}
   }
 
   function Bubbles({o}:{o:SceneObject}){
@@ -563,7 +572,12 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   }
   async function loadSettingDoc(id:string){
     const r = await fetch(`/api/settings/get?id=${id}`); const j = await r.json();
-    if (j.ok && j.doc){ setModel(j.doc.model); setCurrentId(j.doc.id); setCurrentName(j.doc.name); setDirty(false); setSel(null); }
+    if (j.ok && j.doc){
+      const m = j.doc.model as SceneModel;
+      const ensured = ensureFinishDefaults(m.finishes, m.lighting);
+      const withDefaults: SceneModel = { ...m, finishes: ensured.finishes, lighting: ensured.lighting, meta: { ...(m.meta||{}), preset: m.meta?.preset || "yc_room" } } as any;
+      setModel(withDefaults); setCurrentId(j.doc.id); setCurrentName(j.doc.name); setDirty(false); setSel(null);
+    }
   }
   async function saveSettingDoc({ asNew=false, activate=false } = {}){
     const name = asNew ? (prompt("Name this setting:", currentName || "YC Room") || "Untitled") : currentName;
@@ -1111,7 +1125,7 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
               </label>
               <div style={{ marginTop:6 }}>
                 <div>Object reference images</div>
-                <input type="file" accept="image/*" multiple onChange={async e=>{ const files = e.target.files; if(!files) return; const urls = await Promise.all([...files].map(f=> new Promise<string>(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result as string); fr.readAsDataURL(f); }))); updateSelected({ } as any); }}/>
+                <input type="file" accept="image/*" multiple onChange={async e=>{ const files = e.target.files; if(!files) return; const urls = await Promise.all([...files].map(f=> new Promise<string>(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result as string); fr.readAsDataURL(f); }))); updateSelected({ meta: { ...(selected.meta||{}) }, images: [ ...(((selected as any).images)||[]), ...urls ] } as any); }}/>
                 <button className="btn-ghost" style={{ marginTop:6 }} onClick={()=>autoDescribeObject(selected!)}>Auto-Describe from refs</button>
               </div>
             </>) : <span style={{ color:"var(--ink-dim)" }}>Select an object</span>}
