@@ -16,6 +16,17 @@ type Camera = { fov_deg:number; pos:[number,number,number]; look_at:[number,numb
 
 const ROOT = path.join(process.cwd(), ".cache", "render_kit");
 function ensureDir(p: string) { fs.mkdirSync(p, { recursive: true }); }
+const STATUS = path.join(ROOT, "status.json");
+
+type StatusEntry = { ts:number; message:string; file?:string };
+function pushStatus(message:string, file?:string){
+  try{
+    ensureDir(ROOT);
+    const list: StatusEntry[] = fs.existsSync(STATUS) ? JSON.parse(fs.readFileSync(STATUS, "utf-8")) : [];
+    list.push({ ts: Date.now(), message, file });
+    fs.writeFileSync(STATUS, JSON.stringify(list.slice(-500), null, 2));
+  } catch {}
+}
 
 function b64OfSVG(svg: string) { return Buffer.from(svg).toString("base64"); }
 function bufOfDataURL(s: string) { return Buffer.from(s.split(",").pop()!, "base64"); }
@@ -65,6 +76,7 @@ export async function buildCharacterSheets(profiles: CharacterProfile[], setting
 
       const file = path.join(charDir, `${pose}.png`);
       fs.writeFileSync(file, buf);
+      pushStatus(`character_sheet: ${p.name} (${pose})`, file);
       manifest.push({ type: "character_pose", name: p.name, pose, file });
       await throttle();
     }
@@ -105,6 +117,7 @@ export async function buildFloorPlan(setting: SettingProfile) {
   const buf = await geminiImageCall(process.env.GEMINI_API_KEY!, contents);
   const file = path.join(outDir, `floor_plan.png`);
   fs.writeFileSync(file, buf);
+  pushStatus("floor_plan", file);
   return [{ type:"floor_plan", file }];
 }
 
@@ -132,6 +145,7 @@ export async function buildElevations(setting: SettingProfile) {
     const buf = await geminiImageCall(process.env.GEMINI_API_KEY!, contents);
     const file = path.join(outDir, `elevation_${e.id}.png`);
     fs.writeFileSync(file, buf);
+    pushStatus(`elevation_${e.id}`, file);
     results.push({ type:"elevation", id:e.id, file });
     await throttle();
   }
@@ -181,6 +195,7 @@ export async function buildPerspectives(profiles: CharacterProfile[], setting: S
     const buf = await geminiImageCall(process.env.GEMINI_API_KEY!, contents);
     const file = path.join(outDir, `perspective_${cam.fov_deg}_${keyOf(cam)}${color?"_color":"_line"}.png`);
     fs.writeFileSync(file, buf);
+    pushStatus(`perspective_${cam.fov_deg}_${color?"color":"line"}`, file);
     results.push({ type:"perspective", fov: cam.fov_deg, color, file });
 
     // register in continuity memory so future shots can reference these plates
@@ -229,6 +244,7 @@ export async function buildRoomRefs(profiles: CharacterProfile[], setting: Setti
     const buf = await geminiImageCall(process.env.GEMINI_API_KEY!, contents);
     const file = path.join(outDir, `room_ref_${cam.fov_deg}_${keyOf(cam)}.png`);
     fs.writeFileSync(file, buf);
+    pushStatus(`room_ref_${cam.fov_deg}`, file);
     results.push({ type:"room_ref", fov: cam.fov_deg, file });
     await throttle();
   }

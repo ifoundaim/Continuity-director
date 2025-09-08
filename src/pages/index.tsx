@@ -60,6 +60,7 @@ export default function Home() {
   const [assistantMsg, setAssistantMsg] = useState("");
   const [usageRemaining, setUsageRemaining] = useState<number|undefined>(undefined);
   const [shotbook, setShotbook] = useState<{ id:string; camera:any; created_at:number; file:string }[]>([]);
+  const [buildStatus, setBuildStatus] = useState<{ running:boolean; itemsDone:number; lastMessage:string|null }|null>(null);
 
   // ---------- validation ----------
   const charValid = profiles.every(p => p.name.trim().length>0 && p.height_cm>0) && profiles.length>0;
@@ -101,6 +102,17 @@ export default function Home() {
   useEffect(()=>{
     (async ()=>{ try{ const r = await fetch('/api/quota'); const j = await r.json(); if(j.ok) setUsageRemaining(j.usage?.remaining); } catch{} })();
   }, []);
+  // poll build status while running
+  useEffect(()=>{
+    let t:any;
+    async function poll(){
+      try{ const r = await fetch('/api/build_status'); const j = await r.json(); if(j.ok){ setBuildStatus({ running:j.running, itemsDone:j.itemsDone, lastMessage:j.lastMessage }); if(j.running){ t=setTimeout(poll, 1200); } else { // finished; refresh shotbook
+        try{ const r2 = await fetch('/api/shotbook'); const j2 = await r2.json(); if (j2.ok) setShotbook(j2.shots||[]); } catch{}
+      } } } catch{}
+    }
+    poll();
+    return ()=>{ if(t) clearTimeout(t); };
+  }, [img]);
   useEffect(()=>{
     (async ()=>{
       try { const r = await fetch("/api/shotbook"); const j = await r.json(); if (j.ok) setShotbook(j.shots||[]); } catch {}
@@ -274,6 +286,12 @@ export default function Home() {
           <button className="btn btn--primary" disabled={!readyForRenderKit} onClick={()=>runKit(["full_pack"]) }>Full Pack</button>
           <a className="btn" href="/api/export_pack" download>Download Continuity Pack (.zip)</a>
         </div>
+        {buildStatus && (
+          <div className="row" style={{ marginTop:8 }}>
+            <span className="chip">{buildStatus.running?"Building…":"Idle"}</span>
+            <span className="inline-note">{buildStatus.itemsDone||0} files • {buildStatus.lastMessage||""}</span>
+          </div>
+        )}
         <div className="row" style={{ marginTop:6 }}>
           <button className="btn btn--primary" onClick={()=>setStep(4)} disabled={!readyForShots}>Continue to Direct Shots →</button>
         </div>

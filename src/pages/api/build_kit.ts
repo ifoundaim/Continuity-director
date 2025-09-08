@@ -31,6 +31,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json({ ok:true, dryRun:true, plan });
     }
 
+    // reset status log
+    try{ const outDir = path.join(process.cwd(), ".cache", "render_kit"); fs.mkdirSync(outDir,{recursive:true}); fs.writeFileSync(path.join(outDir, "status.json"), "[]"); }catch{}
+
     if (t.has("character_sheets") || t.has("full_pack")) {
       manifest.push(...await buildCharacterSheets(profilesSafe, settingSafe));
     }
