@@ -170,12 +170,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const contents = [{ role: "user", parts }];
 
-    // Stable cache key
-    // Deterministic hashes for door/carpet + finishes
-    const doorHash = keyOf((activeSceneModel?.doors||[]).slice().sort((a:any,b:any)=> String(a.id||"").localeCompare(String(b.id||""))));
-    const carpetHash = keyOf(activeSceneModel?.carpet || null);
-    const finishesVersion = activeSceneModel?.finishes_version_id || null;
-    const cameraKey = keyOf(camera || (graphJson as any).default_camera);
+    // Stable cache key (use previously computed locks hashes)
 
     const cacheKey = keyOf({
       endpoint: "generate",
