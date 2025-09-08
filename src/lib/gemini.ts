@@ -7,6 +7,26 @@ export async function geminiImageCall(apiKey: string, contents: any) {
     const oneByOnePngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
     return Buffer.from(oneByOnePngBase64, "base64");
   }
+  // Defensive: convert any inline SVG parts to PNG to satisfy Gemini
+  try{
+    for (const c of (contents||[])){
+      const parts = c?.parts || [];
+      for (const p of parts){
+        const data = p?.inline_data || p?.inlineData; // accept both spellings
+        const mime = data?.mime_type || data?.mimeType;
+        if (data && mime === "image/svg+xml"){
+          try{
+            const mod:any = await import("sharp");
+            const sharp = mod.default || mod;
+            const buf = Buffer.from(data.data, "base64");
+            const png = await sharp(buf).png().toBuffer();
+            if (p.inline_data){ p.inline_data = { data: png.toString("base64"), mime_type: "image/png" }; }
+            if (p.inlineData){ p.inlineData = { data: png.toString("base64"), mimeType: "image/png" }; }
+          } catch {}
+        }
+      }
+    }
+  } catch {}
   const res = await fetch(`${ENDPOINT}?key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
