@@ -6,7 +6,7 @@ export const charactersSection = (profiles: CharacterProfile[]) => {
   const list = [...(profiles || [])].sort((a,b)=>a.name.localeCompare(b.name));
   if (!list.length) return "No characters provided.";
   const lines = list.map(p=>`- ${p.name} — height ${p.height_cm} cm. ${p.description || "Keep facial structure and hairstyle consistent."}`);
-  return `Characters (ANIME / CEL-SHADED):
+  return `Characters (PHOTOREAL):
 ${lines.join("\n")}
 Scale rule: all props and characters must respect real-world scale.`;
 };
@@ -138,7 +138,7 @@ ${extra}
 `;
 
 export const editOnlyPrompt = (graph: SceneGraph, instruction: string) => `
-STYLE: ANIME / CEL-SHADED ONLY.
+STYLE: PHOTOREAL OFFICE INTERIOR.
 EDIT ONLY: ${instruction}.
 Do NOT alter: room layout or object sizes/placements from ${graph.scene_id}, camera pose/FOV, or the fixed character features and heights. Preserve lighting/shadows.`;
 

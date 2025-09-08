@@ -7,7 +7,7 @@ import { keyOf, getCache, setCache } from "../../lib/cache";
 import type { CharacterProfile, SettingProfile } from "../../lib/types";
 import { renderWireframeSVG, renderWireframeSVGFromModel } from "../../lib/wireframe";
 import { buildRailsForCamera } from "../../lib/rails";
-import { recordShot, nearestShots } from "../../lib/continuity";
+import { recordShot, nearestShotsMatching, getAnchor, saveAnchor } from "../../lib/continuity";
 import { auditImageForDrift } from "../../lib/audit";
 import { getSetting } from "../../server/settings_fs";
 // removed duplicate import of finishesLightingText (already imported above)
@@ -67,6 +67,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       profilesStable,
       settingStable.description || ""
     );
+
+    // Locks hashes (used for anchor/continuity + cache key)
+    const doorHash = keyOf((activeSceneModel?.doors||[]).slice().sort((a:any,b:any)=> String(a.id||"").localeCompare(String(b.id||""))));
+    const carpetHash = keyOf(activeSceneModel?.carpet || null);
+    const finishesVersion = activeSceneModel?.finishes_version_id || null;
+    const cameraKey = keyOf(camera || (graphJson as any).default_camera);
 
     // Build parts (deterministic order) per new spec:
     const parts: any[] = [];
@@ -129,21 +135,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch {}
     // 6) Prompt text (constant)
     parts.push(textPart(prompt));
-    // 7) Setting refs (sorted)
+    // 7) Anchor image (if available for current locks and setting)
+    const activeSettingId = settingId || null;
+    const locksHashes = { finishesVersion, doorHash, carpetHash, cameraKey: null } as any;
+    const anchor = getAnchor(activeSettingId, locksHashes);
+    if (anchor) parts.push(imagePart(anchor));
+    // 8) Setting refs (sorted)
     for (const b64 of settingStable.images_base64.slice(0, 6)) {
       const buf = Buffer.from(b64.split(",").pop()!, "base64");
       parts.push(imagePart(buf));
     }
-    // 8) Character refs (sorted by name; each sorted internally)
+    // 9) Character refs (sorted by name; each sorted internally)
     for (const p of profilesStable) {
       for (const b64 of (p.images_base64 || []).slice(0, 4)) {
         const buf = Buffer.from(b64.split(",").pop()!, "base64");
         parts.push(imagePart(buf));
       }
     }
-    // 9) Continuity memory (nearest past shots; older first)
+    // 10) Continuity memory (nearest past shots; filtered to current locks; skip anchor)
     if (useNearestRefs) {
-      const neighbors = nearestShots(camera || (graphJson as any).default_camera, 2);
+      const neighbors = nearestShotsMatching(
+        camera || (graphJson as any).default_camera,
+        2,
+        { settingId: activeSettingId, hashes: { finishesVersion, doorHash, carpetHash }, excludeAnchor: true }
+      );
       for (const nb of neighbors) parts.push(imagePart(nb, "image/png"));
     }
     // Overlay (optional): put FIRST if provided
@@ -184,7 +199,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (cached) {
       res.setHeader("X-Cache", "HIT");
       res.setHeader("X-Rails-Order", "material_atlas,constraints,ortho_front,ortho_right,ortho_top,wireframe,depth,normals,ao,plate_line,plate_color,continuity");
-      res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey }));
+      res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey, anchor: !!anchor }));
       res.setHeader("Content-Type", "image/png");
       return res.send(cached);
     }
@@ -192,8 +207,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const buf = await geminiImageCall(apiKey, contents);
     const usage = bumpUsage("generate", 100);
 
-    // Save to shotbook and cache
-    recordShot(camera || (graphJson as any).default_camera, buf);
+    // Save to shotbook and cache; also save anchor if not present
+    recordShot(
+      camera || (graphJson as any).default_camera,
+      buf,
+      { settingId: activeSettingId, hashes: { finishesVersion, doorHash, carpetHash, cameraKey }, is_anchor: false }
+    );
+    if (!anchor) {
+      saveAnchor(activeSettingId, { finishesVersion, doorHash, carpetHash, cameraKey: null } as any, buf);
+    }
     setCache(cacheKey, buf);
 
     // Optional corrective loop (stubbed)
@@ -204,7 +226,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader("X-Cache", "MISS");
     res.setHeader("X-Usage-Remaining", String(usage.remaining));
     res.setHeader("X-Rails-Order", "material_atlas,constraints,ortho_front,ortho_right,ortho_top,wireframe,depth,normals,ao,plate_line,plate_color,continuity");
-    res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey }));
+    res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey, anchor: !!anchor }));
     res.setHeader("Content-Type", "image/png");
     res.send(buf);
   } catch (e:any) {

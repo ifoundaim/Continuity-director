@@ -48,7 +48,7 @@ export default function Home() {
   const [instruction, setInstruction] = useState("If Em height drifted, correct to 160.02 cm. Remove table cup.");
   const [objImg, setObjImg] = useState<string | null>(null);
   const [editImg, setEditImg] = useState<string | null>(null);
-  const [useNearest, setUseNearest] = useState(true);
+  const [useNearest, setUseNearest] = useState(false);
   const [cameraKey, setCameraKey] = useState<keyof typeof cameraPresets>("interview");
   const [preview, setPreview] = useState<PreviewInfo | null>(null);
   const [useOverlayLock, setUseOverlayLock] = useState(true);
@@ -293,7 +293,7 @@ export default function Home() {
           }} />
           <span className="chip">{setting.images_base64?.length || 0} refs</span>
           <label className="inline-note"><input type="checkbox" checked={useNearest} onChange={e=>setUseNearest(e.target.checked)} /> Use nearest past refs</label>
-          <span className="inline-note">Ref order: Palette → Wireframe → Plates → Char refs → Continuity</span>
+          <span className="inline-note">Ref order: Palette → Door → Rails → Wireframe → Carpet → Plates → Text → Anchor → Setting refs → Character refs → Continuity</span>
         </div>
         <div style={{ display:"flex", gap:12, alignItems:"center", marginTop:8 }}>
           <label style={{ display:"flex", alignItems:"center", gap:6 }}>
