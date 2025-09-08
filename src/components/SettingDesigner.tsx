@@ -1102,6 +1102,21 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
               <label>Wall<select value={selected.wall||""} onChange={e=>updateSelected({ wall:(e.target.value||undefined) as any })}>
                 <option value="">(none)</option><option value="N">N</option><option value="S">S</option><option value="E">E</option><option value="W">W</option>
               </select></label>
+              <label>Layer<select value={selected.layer||"floor"} onChange={e=>updateSelected({ layer: (e.target.value||"floor") as any })}>
+                <option value="floor">floor</option>
+                <option value="surface">surface (on table)</option>
+                <option value="wall">wall</option>
+                <option value="ceiling">ceiling</option>
+              </select></label>
+              <div style={{ gridColumn:"1 / span 2", display:"flex", gap:6 }}>
+                <button className="btn" onClick={()=>{
+                  // Snap small object to the largest table center and surface layer
+                  const tables = model.objects.filter(o => (o as any).kind === "table");
+                  if (!tables.length) return;
+                  const t = [...tables].sort((a,b)=> (b.w*b.d)-(a.w*a.d))[0];
+                  updateSelected({ layer:"surface" as any, cx: t.cx, cy: t.cy } as any);
+                }}>Place on table</button>
+              </div>
             </>) : <span style={{ color:"var(--ink-dim)" }}>Select an object</span>}
           </div>
         </div>
