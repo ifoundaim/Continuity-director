@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import "./tokens.css";
+
+@layer components {
+  .panel { @apply bg-gradient-to-b from-panel to-panel2 border border-stroke rounded shadow-lift; }
+  .btn { @apply bg-chip border border-chip-border text-ink px-3 py-2 rounded-[10px]; }
+  .btn:hover { @apply border-accent; }
+  .btn-primary { @apply bg-accent-2 border-accent-2 text-ink; }
+  .btn-ghost { @apply bg-transparent border border-stroke text-ink-dim px-2.5 py-1.5 rounded-[10px]; }
+  .badge { @apply px-2 py-1 rounded-full bg-chip border border-chip-border text-ink-dim; }
+  .pill { @apply px-2.5 py-1.5 rounded-full border border-stroke bg-panel2 text-ink; }
+  .toolbar { @apply flex gap-2 items-center py-2 px-2 border-b border-stroke-2; }
+}
+
+

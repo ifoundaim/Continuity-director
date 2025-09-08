@@ -1,11 +1,16 @@
-import { SceneModel, SceneObject } from "./scene_model";
+import { SceneModel, SceneObject, defaultLayerFor } from "./scene_model";
 import { CLEARANCES, REASONS } from "./physics";
 
 // simple OBB vs OBB using rotation (in radians) for plan view
 function obb(o: SceneObject){
-  const th = (o.rotation ?? 0) * Math.PI/180;
+  let rotDeg = o.rotation ?? 0;
+  let w = o.w || 0; let d = o.d || 0;
+  // Wall-mounted orientation: items span along the wall using width, and protrude into the room by depth
+  if (o.wall === "E" || o.wall === "W") { rotDeg = 90; const t=w; w=d; d=t; }
+  if (o.wall === "N" || o.wall === "S") { rotDeg = 0; }
+  const th = rotDeg * Math.PI/180;
   const c = Math.cos(th), s = Math.sin(th);
-  const hw = (o.w||0)/2, hd = (o.d||0)/2;
+  const hw = w/2, hd = d/2;
   return { cx:o.cx, cy:o.cy, c, s, hw, hd };
 }
 function overlap2D(a:any,b:any){
@@ -35,6 +40,27 @@ export function detectCollisions(model: SceneModel): Collision[] {
   const out: Collision[] = [];
   const R = model.room;
 
+  // Simple vertical ranges per layer (feet)
+  const layerZ = {
+    floor: { z0: 0.0, z1: 3.0 },        // floor-standing objects up to ~3 ft
+    surface: { z0: 2.3, z1: 5.0 },      // on-table/surfaces
+    wall: { z0: 0.0, z1: R.height },    // mounted on walls (span entire height)
+    ceiling: { z0: R.height - 1.5, z1: R.height } // lights etc
+  } as const;
+
+  function zRange(o: SceneObject){
+    const L = (o.layer||"floor") as keyof typeof layerZ;
+    const base = layerZ[L];
+    // If mount_h provided, center the object's vertical range around it when applicable
+    if (L === "wall" && o.mount_h && o.h){
+      const half = (o.h||0)/2; return { z0: Math.max(0, o.mount_h - half), z1: Math.min(R.height, o.mount_h + half) };
+    }
+    return base;
+  }
+  function zOverlap(a: SceneObject, b: SceneObject){
+    const A = zRange(a), B = zRange(b); return (Math.min(A.z1, B.z1) > Math.max(A.z0, B.z0));
+  }
+
   // 0) bounds & wall fit
   for(const o of model.objects){
     const r = obb(o);
@@ -43,21 +69,33 @@ export function detectCollisions(model: SceneModel): Collision[] {
     const maxX = o.cx + Math.max(o.w, o.d);
     const minY = o.cy - Math.max(o.w, o.d);
     const maxY = o.cy + Math.max(o.w, o.d);
-    if (minX < 0 || maxX > R.width || minY < 0 || maxY > R.depth){
-      out.push({ a:o, reason:REASONS.OUT_OF_BOUNDS, severity:"error" });
-    }
-    if (o.wall){
+
+    if (!o.wall) {
+      if (minX < 0 || maxX > R.width || minY < 0 || maxY > R.depth){
+        out.push({ a:o, reason:REASONS.OUT_OF_BOUNDS, severity:"error" });
+      }
+    } else {
+      // For wall-mounted objects, semantics: center sits exactly on the wall line
       const eps = CLEARANCES.wallGapMin;
-      const bad =
-        (o.wall==="E" && Math.abs(o.cx - R.width) > eps) ||
-        (o.wall==="W" && Math.abs(o.cx - 0) > eps) ||
-        (o.wall==="N" && Math.abs(o.cy - 0) > eps) ||
-        (o.wall==="S" && Math.abs(o.cy - R.depth) > eps);
-      if (bad) out.push({ a:o, reason:REASONS.WALL_MISALIGNED, severity:"error" });
+      const dEff = (o.d||0);
+      if (o.wall === "E"){
+        if (Math.abs(o.cx - R.width) > eps) out.push({ a:o, reason:REASONS.WALL_MISALIGNED, severity:"error" });
+        // interior edge must be inside room by depth/2
+        if ((o.cx - dEff/2) < -eps) out.push({ a:o, reason:REASONS.OUT_OF_BOUNDS, severity:"error" });
+      } else if (o.wall === "W"){
+        if (Math.abs(o.cx - 0) > eps) out.push({ a:o, reason:REASONS.WALL_MISALIGNED, severity:"error" });
+        if ((o.cx + dEff/2) > R.width + eps) out.push({ a:o, reason:REASONS.OUT_OF_BOUNDS, severity:"error" });
+      } else if (o.wall === "N"){
+        if (Math.abs(o.cy - 0) > eps) out.push({ a:o, reason:REASONS.WALL_MISALIGNED, severity:"error" });
+        if ((o.cy + dEff/2) > R.depth + eps) out.push({ a:o, reason:REASONS.OUT_OF_BOUNDS, severity:"error" });
+      } else if (o.wall === "S"){
+        if (Math.abs(o.cy - R.depth) > eps) out.push({ a:o, reason:REASONS.WALL_MISALIGNED, severity:"error" });
+        if ((o.cy - dEff/2) < -eps) out.push({ a:o, reason:REASONS.OUT_OF_BOUNDS, severity:"error" });
+      }
     }
   }
 
-  // 1) object–object overlaps by layer
+  // 1) object–object overlaps by layer (2.5D: allow stacking across layers)
   const objs = model.objects.slice();
   for (let i=0;i<objs.length;i++){
     for (let j=i+1;j<objs.length;j++){
@@ -66,21 +104,24 @@ export function detectCollisions(model: SceneModel): Collision[] {
       // Skip parent-child overlap
       if (A.attachTo===B.id || B.attachTo===A.id) continue;
 
-      // Layer rules: collide only when competing for the same real estate
-      const sameLayer = (A.layer||"floor") === (B.layer||"floor");
-      const bothWall   = (A.layer==="wall" && B.layer==="wall" && A.wall===B.wall);
-      const bothFloor  = (A.layer==="floor" && B.layer==="floor");
-      const bothSurface= (A.layer==="surface" && B.layer==="surface");
+      // Layer + 2.5D vertical check: require same layer AND vertical overlap
+      const layerA = (A.layer || defaultLayerFor(A)) as any;
+      const layerB = (B.layer || defaultLayerFor(B)) as any;
+      if (layerA !== layerB) continue; // different layers are allowed to stack
+      if (!zOverlap(A,B)) continue;    // no vertical intersection → no collision
+      // Special case: wall items on different walls never collide
+      if (layerA === "wall" && A.wall && B.wall && A.wall !== B.wall) continue;
 
-      const test = (bothWall || bothFloor || bothSurface || sameLayer);
-      if (!test) continue;
+      // Ignore hard overlaps between table and chairs; handled via chair clearance warnings
+      const isChairTable = (A.kind==="chair" && B.kind==="table") || (A.kind==="table" && B.kind==="chair");
+      if (isChairTable) continue;
 
       const pa = obb(A), pb = obb(B);
       if (overlap2D(pa,pb)) out.push({ a:A, b:B, reason:REASONS.OVERLAP, severity:"error" });
     }
   }
 
-  // 2) soft clearances (chairs around tables)
+  // 2) soft clearances (chairs around tables) – floor layer only
   const chairs = objs.filter(o=>o.kind==="chair");
   const tables = objs.filter(o=>o.kind==="table");
   const seatBack = CLEARANCES.chairBackToTable; // 18 in

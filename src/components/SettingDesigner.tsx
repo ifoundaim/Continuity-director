@@ -12,6 +12,8 @@ import CharacterLayer, { CharPlacement } from "./CharacterLayer";
 import { renderOverlayPNG } from "../lib/overlay";
 import type { CameraPose } from "../lib/camera";
 import ElevationEditor from "./ElevationEditor";
+import dynamic from "next/dynamic";
+const ThreePreview = dynamic(()=>import("./ThreePreview"), { ssr:false });
 import { exportSceneLockJSON, exportIsometricSVG } from "../lib/exporters";
 import { YC_DESCRIPTIONS } from "../lib/object_descriptions";
 import { PRESETS as FIN_PRESETS } from "../lib/finishes_presets";
@@ -49,6 +51,8 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   const [showCollisions, setShowCollisions] = useState(true);
   const [showWarnings, setShowWarnings] = useState(true);
   const [showErrors, setShowErrors] = useState(true);
+  const [showGuides, setShowGuides] = useState(true);
+  const [showProposals, setShowProposals] = useState(true);
   useEffect(()=>{ setCollisions(detectCollisions(model)); }, [model]);
   const containerRef = useRef<HTMLDivElement|null>(null);
   const [canvasSize, setCanvasSize] = useState<{w:number; h:number}>({ w: 1200, h: 720 });
@@ -74,6 +78,14 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   const [cal, setCal] = useState<Calibration|undefined>(undefined);
   const [calMode, setCalMode] = useState<null|"p1"|"p2">(null);
   const [calTemp, setCalTemp] = useState<{p1?:{x:number;y:number}, p2?:{x:number;y:number}}>({});
+  const [labelEdit, setLabelEdit] = useState<{ id:string; x:number; y:number; value:string } | null>(null);
+  const [showDiag, setShowDiag] = useState(false);
+
+  // CSS variable helper
+  function getCss(varName: string){
+    if (typeof window === "undefined") return "";
+    return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  }
 
   const CANVAS_W = canvasSize.w || CANVAS_W_FALLBACK;
   const CANVAS_H = canvasSize.h || CANVAS_H_FALLBACK;
@@ -323,6 +335,29 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
     setModel(m=>({ ...m, objects:[...m.objects, o]}));
     setSel(o.id);
   }
+
+  function addPreset(key:string){
+    const k = key.toLowerCase();
+    if (k === "table") return add("table");
+    if (k === "chair") return add("chair");
+    if (k === "tv") return add("tv");
+    if (k === "panel") return add("panel");
+    if (k === "whiteboard") return add("whiteboard");
+    if (k === "plant") return add("plant");
+    if (k === "decal") return add("decal");
+    if (k === "custom") return addCustom();
+  }
+
+  function zoomFit(){
+    const pad = 60; const sx = (CANVAS_W - pad*2) / model.room.width; const sy = (CANVAS_H - pad*2) / model.room.depth;
+    const fit = Math.min(sx, sy); setZoom(fit / (pxPerFt||1)); setPan({ x:0, y:0 });
+  }
+  function zoom100(){ setZoom(1); setPan({ x:0, y:0 }); }
+
+  async function generatePaletteCard(){
+    const r = await fetch("/api/palette", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ scene: model })}).then(r=>r.json());
+    if (r?.dataUrl){ setPaletteUrl(r.dataUrl); const a=document.createElement("a"); a.href=r.dataUrl; a.download=`${(model.name||"scene").replace(/\s+/g,"_")}_palette.svg`; a.click(); }
+  }
   function addCustom(){ const name = window.prompt("Object name (e.g., YC decal strip):", "custom"); if(name===null) return; add("custom", name.trim() || "custom"); }
   function remove(id:string){ setModel(m=>({ ...m, objects: m.objects.filter(o=>o.id!==id) })); if(sel===id) setSel(null); }
 
@@ -550,95 +585,103 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
     setActiveSettingId(target); await refreshList();
   }
 
+  const errs = countErrors(collisions);
+  const warns = countWarnings(collisions);
+
   return (
-    <div style={{ display:"grid", gridTemplateColumns:"1fr 320px", gap:12 }}>
-      <div>
-        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8, flexWrap:"wrap" }}>
-          <strong>Setting:</strong>
-          <select value={currentId || ""} onChange={e=>{ const v = e.target.value; if (v) loadSettingDoc(v); }} style={{ minWidth:220 }}>
+    <div className="grid" style={{ gridTemplateColumns:"240px 1fr 320px", gap:12 }}>
+      
+      <aside style={{ display:"grid", gap:10, gridAutoRows:"min-content", alignContent:"start", alignItems:"start" }}>
+        <details className="panel compact" open>
+          <summary>Objects</summary>
+          <div className="section-body" style={{ display:"grid", gap:8 }}>
+            {["Table","Chair","TV","Panel","Whiteboard","Plant","Decal","Custom"].map(k=> (
+              <button key={k} className="btn" title={`Add ${k}`} onClick={()=>addPreset(k)}>{k}</button>
+            ))}
+          </div>
+        </details>
+        <details className="panel compact">
+          <summary>Tools</summary>
+          <div className="section-body" style={{ display:"grid", gap:6 }}>
+            <input type="file" accept="image/*" multiple onChange={e=>setObjRefFiles(e.target.files)} title="Upload refs for auto-propose" />
+            <button className="btn" title="Suggest objects from refs" disabled={!objRefFiles || busyObj} onClick={async ()=>{
+              if (!objRefFiles) return; setBusyObj(true);
+              const arr = await Promise.all(Array.from(objRefFiles).map(async f=>{ const buf = await f.arrayBuffer(); return Buffer.from(buf as any).toString("base64"); }));
+              const det = await fetch("/api/interpret/objects", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ imagesBase64: arr })}).then(r=>r.json());
+              try{ const mapped = proposePlacements(det, model, cal); const P: ObjectProposal[] = mapped.map((p:any)=>({ action:"add", object:p.obj, conf:p.conf, reason:p.reason })); setProposals(P); } finally { setBusyObj(false); }
+            }}>{busyObj?"Interpreting…":"Auto-Propose (objects)"}</button>
+            <button className="btn" title="Calibrate scale from two points" onClick={()=> setCalMode(calMode?null:"p1")}>{calMode?"Exit calibration":"Calibrate scale"}</button>
+            <button className="btn" title="Resolve collisions" onClick={()=>{ const r = resolveCollisions(model, 8); setModel(r.model); setCollisions(r.remaining); }}>Resolve collisions</button>
+            <button className="btn" title="Run full validity pass" onClick={makeItValid}>Make it valid</button>
+          </div>
+        </details>
+        <details className="panel compact">
+          <summary>View options</summary>
+          <div className="section-body">
+            <label><input type="checkbox" checked={showCollisions} onChange={e=>setShowCollisions(e.target.checked)} /> Show collisions</label><br/>
+            <label><input type="checkbox" checked={showGuides} onChange={e=>setShowGuides(e.target.checked)} /> Show guides</label><br/>
+            <label><input type="checkbox" checked={showProposals} onChange={e=>setShowProposals(e.target.checked)} /> Show proposals</label>
+          </div>
+        </details>
+        <details className="panel compact">
+          <summary>Room template</summary>
+          <div className="section-body">
+            <label>Room template: </label>
+            <select onChange={async e=>{ const v = e.target.value; if (v === "standard"){ setModel(m => ({ ...m, room: { ...m.room, ...ROOM_TEMPLATES.yc_interview }, objects: m.objects.map(o=> o.kind==="table" ? { ...o, ...OBJECT_DEFAULTS.table84x36 } : o) })); setTimeout(()=>makeItValid(), 0); } else if (v === "compact"){ setModel(m => ({ ...m, room: { ...m.room, ...ROOM_TEMPLATES.compact }, objects: m.objects.map(o=> o.kind==="table" ? { ...o, ...OBJECT_DEFAULTS.table72x36 } : o) })); setTimeout(()=>makeItValid(), 0); } e.currentTarget.selectedIndex = 0; }}>
+              <option>(choose)</option>
+              <option value="standard">Standard (20×14 ft, 84×36 table)</option>
+              <option value="compact">Compact (18×12 ft, 72×36 table)</option>
+            </select>
+          </div>
+        </details>
+      </aside>
+      <section className="panel" style={{ position:"relative", overflow:"hidden" }}>
+        {/* Command bar */}
+        <div className="toolbar">
+          <select value={currentId || ""} onChange={e=>{ const v = e.target.value; if (v) loadSettingDoc(v); }} className="pill" title="Switch setting" style={{ minWidth:220 }}>
             <option value="">{currentName}{dirty?" *":""}</option>
             {settings.map(s=><option key={s.id} value={s.id}>{s.name}{activeSettingId===s.id?" (active)":""}</option>)}
           </select>
-          <button onClick={()=>saveSettingDoc({ asNew:true })}>Save As…</button>
-          <button onClick={()=>saveSettingDoc({ asNew:false })} disabled={!dirty && !!currentId}>Save</button>
-          <button onClick={()=>{ if (!currentId) return saveSettingDoc({ asNew:true }); saveSettingDoc({ asNew:true }).then(()=>{}); }}>Duplicate</button>
-          <button onClick={()=>activateSetting()}>Activate</button>
-          <button onClick={removeSettingDoc} disabled={!currentId}>Delete</button>
-          <span style={{ marginLeft:8, color:"#9aa3b2" }}>{activeSettingId ? `Active: ${settings.find(s=>s.id===activeSettingId)?.name||activeSettingId}` : "No active setting"}</span>
-        </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8, flexWrap:"wrap" }}>
-          {/* presets */}
-          <select onChange={e=>{ const o = applyPreset(e.target.value); if(o){ setModel(m=>({...m, objects:[...m.objects, o]})); setSel(o.id);} e.currentTarget.selectedIndex=0; }}>
-            <option>Add preset…</option>
-            {PRESETS.map(p=>
-              <option key={p.name} value={p.name}>{p.name}</option>
-            )}
-          </select>
-          <button onClick={()=>add("decal")} title="Add decal">+ Decal</button>
-          <button onClick={addCustom} title="Add custom object">+ Custom…</button>
-          <button onClick={()=>{ const r = resolveCollisions(model, 8); setModel(r.model); setCollisions(r.remaining); }}>Resolve Collisions</button>
-          <button onClick={makeItValid}>Make it valid</button>
-          {/* Auto-Propose objects */}
-          <input type="file" accept="image/*" multiple onChange={e=>setObjRefFiles(e.target.files)} />
-          <button disabled={!objRefFiles || busyObj} onClick={async ()=>{
-            if (!objRefFiles) return; setBusyObj(true);
-            const arr = await Promise.all(Array.from(objRefFiles).map(async f=>{
-              const buf = await f.arrayBuffer(); return Buffer.from(buf as any).toString("base64");
-            }));
-            const det = await fetch("/api/interpret/objects", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ imagesBase64: arr })}).then(r=>r.json());
-            try{
-              const mapped = proposePlacements(det, model, cal);
-              const P: ObjectProposal[] = mapped.map((p:any)=>({ action:"add", object:p.obj, conf:p.conf, reason:p.reason }));
-              setProposals(P);
-            } finally { setBusyObj(false); }
-          }}>{busyObj?"Interpreting…":"Auto-Propose (objects)"}</button>
-          <button onClick={()=> setCalMode(calMode?null:"p1")}>{calMode?"Exit calibration":"Calibrate scale"}</button>
-          <label style={{ marginLeft:8 }}>
-            <input type="checkbox" checked={showCollisions} onChange={e=>setShowCollisions(e.target.checked)} />
-            Show collisions
-          </label>
-          {showCollisions && (
-            <span style={{ marginLeft:8 }}>
-              <label><input type="checkbox" checked={showErrors} onChange={e=>setShowErrors(e.target.checked)} /> Errors</label>
-              <label style={{ marginLeft:6 }}><input type="checkbox" checked={showWarnings} onChange={e=>setShowWarnings(e.target.checked)} /> Warnings</label>
-            </span>
-          )}
-          <label style={{ marginLeft:8 }}>Room template:</label>
-          <select onChange={async e=>{
-            const v = e.target.value;
-            if (v === "standard"){
-              setModel(m => ({
-                ...m,
-                room: { ...m.room, ...ROOM_TEMPLATES.yc_interview },
-                objects: m.objects.map(o=> o.kind==="table" ? { ...o, ...OBJECT_DEFAULTS.table84x36 } : o)
-              }));
-              setTimeout(()=>makeItValid(), 0);
-            } else if (v === "compact"){
-              setModel(m => ({
-                ...m,
-                room: { ...m.room, ...ROOM_TEMPLATES.compact },
-                objects: m.objects.map(o=> o.kind==="table" ? { ...o, ...OBJECT_DEFAULTS.table72x36 } : o)
-              }));
-              setTimeout(()=>makeItValid(), 0);
-            }
-            e.currentTarget.selectedIndex = 0;
-          }}>
-            <option>(choose)</option>
-            <option value="standard">Standard (20×14 ft, 84×36 table)</option>
-            <option value="compact">Compact (18×12 ft, 72×36 table)</option>
-          </select>
-          <span style={{ marginLeft:8, color:"#9aa3b2" }}>{violations.length ? `⚠ ${violations.length} collision(s)` : "✅ No collisions"}</span>
-
-          <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
-            <select value={units} onChange={e=>{ const u=e.target.value as Units; setUnits(u); setModel(m=>({ ...m, units:u })); }}>
-              <option value="ft">ft</option><option value="cm">cm</option>
-            </select>
-            <button onClick={()=>{ localStorage.removeItem("settingDesigner:model"); setModel(defaultYCModel()); }}>Reset</button>
+          <button className="btn" title="Save (overwrite)" onClick={()=>saveSettingDoc({ asNew:false })} disabled={!dirty && !!currentId}>Save</button>
+          <button className="btn" title="Save as new" onClick={()=>saveSettingDoc({ asNew:true })}>Save As…</button>
+          <button className="btn" title="Duplicate as new" onClick={()=>{ if (!currentId) return saveSettingDoc({ asNew:true }); saveSettingDoc({ asNew:true }).then(()=>{}); }}>Duplicate</button>
+          <div style={{ display:"flex", gap:6, marginLeft:8 }}>
+            {(["plan","iso"] as const).map(t=> (
+              <button key={t} className={`btn-ghost ${activeTab===t ? "btn" : ""}`} title={`Switch to ${t==="plan"?"Floor plan":"Isometric"}`}
+                onClick={()=>setActiveTab(t)}>{t==="plan"?"Floor plan":"Isometric"}</button>
+            ))}
           </div>
+          <div style={{ flex:1 }} />
+          <div className="badge" title="Collision status" style={{ background: errs?"rgba(239,68,68,0.15)":(warns?"rgba(245,158,11,0.15)":"rgba(52,211,153,0.12)"), borderColor: errs?"var(--err)":(warns?"var(--warn)":"var(--chip-border)"), color: errs?"var(--err)":(warns?"var(--warn)":"#7bd7b2") }}>
+            {errs? `${errs} error${errs>1?"s":""}` : warns? `${warns} warning${warns>1?"s":""}` : "Collisions: 0"}
+          </div>
+          <div className="badge" title="Zoom level">Zoom {Math.round(zoom*100)}%</div>
+          <button className="btn-ghost" title="Fit to room" onClick={zoomFit}>Fit</button>
+          <button className="btn-ghost" title="Zoom 100%" onClick={zoom100}>100%</button>
+          <button className="btn-ghost" title="Diagnostics" onClick={()=>setShowDiag(s=>!s)}>Diagnostics</button>
         </div>
+        {/* Finishes & Lighting collapsible; moved camera tabs into toolbar to avoid duplication */}
+        <details className="panel compact" style={{ margin:12 }}>
+          <summary style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <span>Finishes & Lighting</span>
+            <div className="palette" style={{ marginLeft:6 }}>
+              <div className="swatch" style={{ background: model.finishes?.wallHex || "#F7F6F2" }} title={`Walls ${model.finishes?.wallHex||""}`} />
+              <div className="swatch" style={{ background: (model.finishes?.floor as any)?.kind==="carpet_tiles" ? (model.finishes?.floor as any)?.baseHex : (model.finishes?.floor as any)?.tintHex }} title="Floor" />
+              <div className="swatch" style={{ background: model.finishes?.accentHex || "#FF6D00" }} title="Accent" />
+              <div className="swatch" style={{ background: model.finishes?.mullionHex || "#1C1F22" }} title="Mullion" />
+              <div className="swatch" style={{ background: model.finishes?.glassTintHex || "#EAF2F6" }} title="Glass" />
+            </div>
+            <div className="badge" title="Correlated color temperature">{model.lighting?.cctK || 4300}K</div>
+          </summary>
+          <div className="section-body" style={{ padding:12 }}>
+            <button className="btn" title="Generate palette card SVG" onClick={generatePaletteCard} style={{ marginBottom:12 }}>Generate Palette Card</button>
+          </div>
+        </details>
+        
 
-        <fieldset style={{ margin:"6px 0", border:"1px solid #333", padding:"8px", borderRadius:6 }}>
-          <legend>Finishes & Lighting</legend>
+        <details className="panel compact" style={{ margin:12 }}>
+          <summary>Finishes & Lighting controls</summary>
+          <div className="section-body">
           <div style={{ display:"grid", gridTemplateColumns:"repeat(6, minmax(120px, 1fr))", gap:8 }}>
             <div>
               <label>Preset</label>
@@ -761,15 +804,10 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
             {/* Auto-interpret + Palette */}
             <FinishesActions />
           </div>
-        </fieldset>
+          </div>
+        </details>
 
-        <div style={{ display:"flex", gap:8, marginBottom:8 }}>
-          {(["plan","elevN","elevS","elevE","elevW","iso"] as const).map(t=> (
-            <button key={t} onClick={()=>setActiveTab(t)} style={{ background: activeTab===t ? "#253049" : "#1b2230", border:"1px solid #3a4255", color:"#e9ecf1", padding:"6px 10px", borderRadius:8, cursor:"pointer" }}>
-              {t==="plan"?"Floor plan":t==="iso"?"Isometric":"Elevation "+t.slice(-1)}
-            </button>
-          ))}
-        </div>
+        {/* removed duplicate camera tabs to avoid redundancy */}
 
         <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
           <button onClick={()=>setZoom(z=>Math.max(0.5, z-0.1))}>−</button>
@@ -783,7 +821,7 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           <span style={{ color:"#5a6374", marginLeft:8 }}>Tip: hold Space and drag to pan</span>
         </div>
 
-        {proposals && (
+        {showProposals && proposals && (
           <div style={{margin:"6px 0", padding:"6px", border:"1px dashed #444", borderRadius:8}}>
             <b>Proposals</b> ({proposals.length})
             <div style={{maxHeight:160, overflow:"auto", marginTop:6}}>
@@ -828,8 +866,8 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
                style={{ background:"#0f1217", border:"1px solid #232833", borderRadius:12 }}>
             {defs}
             <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-              {Array.from({length:Math.ceil(model.room.width/GRID_FT)+1}).map((_,i)=>{ const x = toCanvasX(i*GRID_FT); return <line key={"gx"+i} x1={x} x2={x} y1={toCanvasY(0)} y2={toCanvasY(model.room.depth)} stroke="#222a38" strokeWidth={i%2===0?1:0.5} /> })}
-              {Array.from({length:Math.ceil(model.room.depth/GRID_FT)+1}).map((_,i)=>{ const y = toCanvasY(i*GRID_FT); return <line key={"gy"+i} y1={y} y2={y} x1={toCanvasX(0)} x2={toCanvasX(model.room.width)} stroke="#222a38" strokeWidth={i%2===0?1:0.5} /> })}
+              {Array.from({length:Math.ceil(model.room.width/GRID_FT)+1}).map((_,i)=>{ const x = toCanvasX(i*GRID_FT); const major = i%5===0; return <line key={"gx"+i} x1={x} x2={x} y1={toCanvasY(0)} y2={toCanvasY(model.room.depth)} stroke={major ? (getCss("--grid-strong")||"#23304a") : (getCss("--grid")||"#1a2233")} strokeWidth={major?1:0.5} /> })}
+              {Array.from({length:Math.ceil(model.room.depth/GRID_FT)+1}).map((_,i)=>{ const y = toCanvasY(i*GRID_FT); const major = i%5===0; return <line key={"gy"+i} y1={y} y2={y} x1={toCanvasX(0)} x2={toCanvasX(model.room.width)} stroke={major ? (getCss("--grid-strong")||"#23304a") : (getCss("--grid")||"#1a2233")} strokeWidth={major?1:0.5} /> })}
               <rect x={toCanvasX(0)} y={toCanvasY(0)} width={toPx(model.room.width)} height={toPx(model.room.depth)} fill="none" stroke="#3a4255" strokeWidth={2} />
               {/* Glass wall tint (E) */}
               <rect
@@ -845,16 +883,22 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
               <text x={(toCanvasX(0)+toCanvasX(model.room.width))/2} y={toCanvasY(model.room.depth)+14} fill="#8aa6ff" fontSize={12} textAnchor="middle" opacity={0.8}>S</text>
               <text x={toCanvasX(0)-10} y={(toCanvasY(0)+toCanvasY(model.room.depth))/2} fill="#8aa6ff" fontSize={12} textAnchor="middle" opacity={0.8}>W</text>
               <text x={toCanvasX(model.room.width)+32} y={(toCanvasY(0)+toCanvasY(model.room.depth))/2} fill="#8aa6ff" fontSize={12} textAnchor="middle" opacity={0.8}>E (glass)</text>
-              {model.objects.map(o=>{ const x = toCanvasX(o.cx) - toPx(o.w)/2; const y = toCanvasY(o.cy) - toPx(o.d)/2; const seld = sel===o.id; const rot = o.rotation || 0; const idsToHalo = new Set(collisions.filter((c:any)=> showCollisions && ((c.severity==="error" && showErrors) || (c.severity==="warning" && showWarnings))).flatMap((c:any)=>[c.a?.id,c.b?.id].filter(Boolean))); const isBad = idsToHalo.has(o.id); const haloColor = (collisions.find((c:any)=> (c.a?.id===o.id || c.b?.id===o.id) && c.severity==="error") ? "#ff6b6b" : "#ffb86b"); return (
+              {model.objects.map(o=>{ const x = toCanvasX(o.cx) - toPx(o.w)/2; const y = toCanvasY(o.cy) - toPx(o.d)/2; const seld = sel===o.id; const rot = o.rotation || 0; const hitCols = collisions.filter((c:any)=> (c.a?.id===o.id || c.b?.id===o.id)); const sev = hitCols.find((h:any)=>h.severity==="error")?"error":(hitCols.find((h:any)=>h.severity==="warning")?"warning":null); const ringColor = sev==="error" ? (getCss("--err")||"#ef4444") : (sev? (getCss("--warn")||"#f59e0b") : null); return (
                 <g key={o.id} transform={`rotate(${rot},${toCanvasX(o.cx)},${toCanvasY(o.cy)})`} onMouseDown={(e)=>{ setSel(o.id); begin(e,o.id,"move"); }}>
-                  {isBad && (
-                    <circle cx={toCanvasX(o.cx)} cy={toCanvasY(o.cy)} r={Math.max(20, (o.w+o.d)*scale*0.6)} fill="none" stroke={haloColor} strokeWidth={2} strokeDasharray="4 4" opacity={0.9}/>
-                  )}
-                  <rect x={x} y={y} width={toPx(o.w)} height={toPx(o.d)} fill={seld?"#253049":"#1b2230"} stroke={seld?"#7c9cff":"#3a4255"} strokeWidth={2} rx={6} />
-                  <rect x={x+toPx(o.w)-8} y={y+toPx(o.d)-8} width={14} height={14} fill="#7c9cff" rx={3} onMouseDown={(e)=>{ e.stopPropagation(); setSel(o.id); begin(e,o.id,"resize"); }} />
+                  {showCollisions && ringColor && (()=>{ const rr = Math.max(12, Math.hypot(o.w||0, o.d||0) * scale * 0.55); return (
+                    <circle cx={toCanvasX(o.cx)} cy={toCanvasY(o.cy)} r={rr} fill={ringColor+"44"} stroke={ringColor} strokeWidth={1.5} />
+                  ); })()}
+                  <rect x={x} y={y} width={toPx(o.w)} height={toPx(o.d)} fill={seld?"#253049":"#1b2230"} stroke={seld?(getCss("--accent")||"#7aa2ff"):"#3a4255"} strokeWidth={2} rx={6} />
+                  <rect x={x+toPx(o.w)-8} y={y+toPx(o.d)-8} width={14} height={14} fill="var(--chip)" stroke={(getCss("--accent")||"#7aa2ff")} strokeWidth={1.5} rx={3} onMouseDown={(e)=>{ e.stopPropagation(); setSel(o.id); begin(e,o.id,"resize"); }} />
                   <text x={toCanvasX(o.cx)} y={toCanvasY(o.cy)} fill="#cbd3e1" textAnchor="middle" dy="0.35em" fontSize={12}>
                     {o.label || o.kind}
                   </text>
+                  {showGuides && seld && dragging.current && dragging.current.mode==="move" && (
+                    <g>
+                      <line x1={toCanvasX(o.cx)} x2={toCanvasX(o.cx)} y1={toCanvasY(0)} y2={toCanvasY(model.room.depth)} stroke={(getCss("--accent")||"#7aa2ff")} strokeDasharray="4 4" strokeWidth={1} opacity={0.6}/>
+                      <line y1={toCanvasY(o.cy)} y2={toCanvasY(o.cy)} x1={toCanvasX(0)} x2={toCanvasX(model.room.width)} stroke={(getCss("--accent")||"#7aa2ff")} strokeDasharray="4 4" strokeWidth={1} opacity={0.6}/>
+                    </g>
+                  )}
                   {seld && <>
                     <RotationAndFacing o={o} />
                     <Bubbles o={o} />
@@ -887,6 +931,63 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           </svg>
         )}
 
+        {/* Vertical Z-axis mini-ruler (2.5D) */}
+        {(activeTab==="plan") && (()=>{
+          const roomH = model.room.height||10;
+          function zRange(o:any){
+            const L = (o?.layer||"floor");
+            if(L==="wall"){
+              if(o?.mount_h && o?.h){ const half=(o.h||0)/2; return { z0: Math.max(0, o.mount_h-half), z1: Math.min(roomH, (o.mount_h+half)) }; }
+              return { z0:0, z1:roomH };
+            }
+            if(L==="surface") return { z0:2.3, z1:5 };
+            if(L==="ceiling") return { z0:roomH-1.5, z1:roomH };
+            return { z0:0, z1:3 };
+          }
+          const rng = selected ? zRange(selected) : null;
+          const H = 160; const W = 28; const pad=8;
+          const pxPerFt = (H-2*pad)/(roomH||10);
+          const yTop = pad; const yBottom = H-pad;
+          const selTop = rng ? (yBottom - rng.z1*pxPerFt) : 0;
+          const selHeight = rng ? Math.max(2, (rng.z1-rng.z0)*pxPerFt) : 0;
+          return (
+            <div style={{ position:"absolute", right:12, top: 160, width:W, height:H, border:"1px solid var(--stroke)", borderRadius:6, background:"linear-gradient(180deg, rgba(122,162,255,0.15), rgba(0,0,0,0))" }} title="Z axis (ft)">
+              <div style={{ position:"absolute", left:0, right:0, top:yTop-1, height:1, background:"var(--stroke-2)" }} />
+              <div style={{ position:"absolute", left:0, right:0, bottom:pad-1, height:1, background:"var(--stroke-2)" }} />
+              {rng && (
+                <div style={{ position:"absolute", left:4, right:4, top: selTop, height: selHeight, borderRadius:4, background:"rgba(122,162,255,0.45)", border:"1px solid var(--accent)" }} />
+              )}
+              <div style={{ position:"absolute", left:2, top:2, fontSize:10, color:"var(--ink-dim)" }}>{roomH}′</div>
+              <div style={{ position:"absolute", left:2, bottom:2, fontSize:10, color:"var(--ink-dim)" }}>0′</div>
+            </div>
+          );
+        })()}
+
+        {showDiag && (
+          <div className="panel" style={{ position:"absolute", top: 52, left: 16, padding:10, maxWidth:380 }}>
+            <b>Diagnostics</b>
+            <div style={{ fontSize:12, color:"var(--ink-dim)", marginTop:6 }}>
+              Errors: {collisions.filter((c:any)=>c.severity==="error").length} • Warnings: {collisions.filter((c:any)=>c.severity==="warning").length}
+            </div>
+            <div style={{ maxHeight:180, overflow:"auto", marginTop:6 }}>
+              {collisions.map((c:any,i:number)=> (
+                <div key={i} style={{ fontSize:12, marginBottom:4 }}>
+                  <span style={{ color: c.severity==="error"?"var(--err)":"var(--warn)" }}>{c.severity}</span>
+                  {": "}
+                  <span>{c.reason}</span>
+                  {" — "}
+                  <span>{c.a?.label||c.a?.kind}</span>
+                  {c.b && <span>{" ↔ "}{c.b?.label||c.b?.kind}</span>}
+                </div>
+              ))}
+            </div>
+            <div style={{ display:"flex", gap:6, marginTop:6 }}>
+              <button className="btn" title="Resolve (sweep)" onClick={()=>{ const r = resolveCollisions(model, 12); setModel(r.model); setCollisions(r.remaining); }}>Auto-separate</button>
+              <button className="btn-ghost" onClick={()=>setShowDiag(false)}>Close</button>
+            </div>
+          </div>
+        )}
+
         {activeTab.startsWith("elev") && (
           <div onWheel={onElevWheel} onTouchStart={onElevTouchStart} onTouchMove={onElevTouchMove} onTouchEnd={onElevTouchEnd}
                style={{ border:"1px solid #232833", borderRadius:12, overflow:"hidden", background:"#0f1217" }}>
@@ -904,21 +1005,30 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
 
         {activeTab==="iso" && (
           <>
-            <div onWheel={onIsoWheel} onTouchStart={onIsoTouchStart} onTouchMove={onIsoTouchMove} onTouchEnd={onIsoTouchEnd}
-                 style={{ border:"1px solid #232833", borderRadius:12, background:"#0f1217", position:"relative" }}>
-              <div style={{ width:CANVAS_W, height:CANVAS_H, overflow:"auto" }}>
-                <div style={{ width:2000, height:1400, transform:`translate(${isoPan.x}px,${isoPan.y}px) scale(${isoZoom})`, transformOrigin:"0 0" }}
-                     dangerouslySetInnerHTML={{ __html: exportIsometricSVG(model, isoAngle) }} />
-              </div>
+            <div style={{ border:"1px solid #232833", borderRadius:12, background:"#0f1217", position:"relative" }}>
+              <ThreePreview model={model} width={CANVAS_W} height={CANVAS_H} onPick={(id)=>{
+                const found = model.objects.find(o=>o.id===id);
+                if(found){ setSel(found.id); }
+              }} onEditLabel={(id, x, y)=>{
+                const found = model.objects.find(o=>o.id===id);
+                if(!found) return;
+                setLabelEdit({ id, x, y, value: found.label || found.kind });
+              }} />
             </div>
-            <div style={{ color:"#9aa3b2", fontSize:12, marginTop:6 }}>
-              Isometric wireframe shows room (blue cage) and objects as extrusions with facing arrows (green). Use this as a geometry ref.
-              <div style={{ marginTop:6 }}>
-                <label>Rotate: </label>
-                <input type="range" min={-180} max={180} value={isoAngle} onChange={e=>setIsoAngle(+e.target.value)} />
-                <span style={{ marginLeft:6 }}>{Math.round(isoAngle)}°</span>
-              </div>
-            </div>
+            {labelEdit && (
+              <input
+                className="label3d"
+                style={{ position:"fixed", left: Math.round(labelEdit.x)+10, top: Math.round(labelEdit.y)+10, zIndex:1000 }}
+                value={labelEdit.value}
+                onChange={e=> setLabelEdit(v=> v ? { ...v, value:e.target.value } : v)}
+                onKeyDown={e=>{
+                  if(e.key==="Enter"){ const v = labelEdit; if(!v) return; setModel(m=>({ ...m, objects: m.objects.map(o=> o.id===v.id ? { ...o, label:v.value } : o ) })); setSel(v.id); setLabelEdit(null); }
+                  if(e.key==="Escape"){ setLabelEdit(null); }
+                }}
+                onBlur={()=>{ const v = labelEdit; if(!v) return; setModel(m=>({ ...m, objects: m.objects.map(o=> o.id===v.id ? { ...o, label:v.value } : o ) })); setSel(v.id); setLabelEdit(null); }}
+                autoFocus
+              />
+            )}
           </>
         )}
 
@@ -963,88 +1073,57 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
             Sel: <strong>{selected.label||selected.kind}</strong> • {selected.cx.toFixed(2)},{selected.cy.toFixed(2)} ft • {selected.w.toFixed(2)}×{selected.d.toFixed(2)}×{(selected.h||0).toFixed(2)} ft • rot {Math.round(selected.rotation||0)}° • face {Math.round(selected.facing ?? selected.rotation ?? 0)}°
           </span>}
         </div>
-      </div>
+      </section>
 
-      <div style={{ background:"#14161b", border:"1px solid #232833", borderRadius:12, padding:12 }}>
-        <h3 style={{ marginTop:0 }}>Properties</h3>
-        <div style={{ color:"#9aa3b2", fontSize:13, marginBottom:8 }}>Room: {model.room.width}×{model.room.depth}×{model.room.height} {model.units}</div>
-        {selected ? (
-          <>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-              <label>Name<input value={selected.label||""} onChange={e=>updateSelected({ label:e.target.value })} /></label>
-              <label>Kind<select value={selected.kind} onChange={e=>updateSelected({ kind: e.target.value as any })}>
-                <option>table</option><option>chair</option><option>tv</option><option>whiteboard</option>
-                <option>panel</option><option>plant</option><option>decal</option><option>custom</option>
-              </select></label>
+      <aside className="panel" style={{ padding:12 }}>
+        <h3 style={{ margin:"4px 0 8px" }}>Properties</h3>
+        <div className="panel" style={{ padding:10, marginBottom:8 }}>
+          <b>Placement</b>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginTop:8 }}>
+            {selected ? (<>
               <label>Center X<input type="number" step={0.1} value={selected.cx} onChange={e=>updateSelected({ cx:+e.target.value })} /></label>
               <label>Center Y<input type="number" step={0.1} value={selected.cy} onChange={e=>updateSelected({ cy:+e.target.value })} /></label>
-              <label>Width<input type="number" step={0.1} value={selected.w} onChange={e=>updateSelected({ w:+e.target.value })} /></label>
-              <label>Depth<input type="number" step={0.1} value={selected.d} onChange={e=>updateSelected({ d:+e.target.value })} /></label>
-              <label>Height<input type="number" step={0.1} value={selected.h||0} onChange={e=>updateSelected({ h:+e.target.value })} /></label>
               <label>Rotation°<input type="number" step={1} value={selected.rotation||0} onChange={e=>updateSelected({ rotation: degClamp(+e.target.value) })} /></label>
               <label>Facing°<input type="number" step={1} value={selected.facing ?? selected.rotation ?? 0} onChange={e=>updateSelected({ facing: degClamp(+e.target.value) })} /></label>
               <label>Wall<select value={selected.wall||""} onChange={e=>updateSelected({ wall:(e.target.value||undefined) as any })}>
                 <option value="">(none)</option><option value="N">N</option><option value="S">S</option><option value="E">E</option><option value="W">W</option>
               </select></label>
+            </>) : <span style={{ color:"var(--ink-dim)" }}>Select an object</span>}
+          </div>
+        </div>
+        <div className="panel" style={{ padding:10, marginBottom:8 }}>
+          <b>Size</b>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginTop:8 }}>
+            {selected ? (<>
+              <label>Width<input type="number" step={0.1} value={selected.w} onChange={e=>updateSelected({ w:+e.target.value })} /></label>
+              <label>Depth<input type="number" step={0.1} value={selected.d} onChange={e=>updateSelected({ d:+e.target.value })} /></label>
+              <label>Height<input type="number" step={0.1} value={selected.h||0} onChange={e=>updateSelected({ h:+e.target.value })} /></label>
               <label>Mount H<input type="number" step={0.1} value={selected.mount_h||0} onChange={e=>updateSelected({ mount_h:+e.target.value })} /></label>
-            </div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginTop:8 }}>
-              <label><input type="checkbox" checked={selected.locked||false} onChange={e=>updateSelected({ locked:e.target.checked })}/> Lock</label>
-              <label>Layer<select value={selected.layer || "floor"} onChange={e=>updateSelected({ layer:e.target.value as any })}>
-                <option>floor</option><option>surface</option><option>wall</option><option>ceiling</option>
-              </select></label>
-              <label>Attach to<select value={selected.attachTo||""} onChange={e=>updateSelected({ attachTo: (e.target.value||null) as any })}>
-                <option value="">(none)</option>
-                {model.objects.filter(p => p.id!==selected.id).map(p=><option key={p.id} value={p.id}>{p.label||p.kind}</option>)}
-              </select></label>
-              <label>Local dx<input type="number" step={0.1} value={selected.local?.dx||0} onChange={e=>updateSelected({ local:{ ...(selected.local||{dx:0,dy:0}), dx:+e.target.value }})} /></label>
-              <label>Local dy<input type="number" step={0.1} value={selected.local?.dy||0} onChange={e=>updateSelected({ local:{ ...(selected.local||{dx:0,dy:0}), dy:+e.target.value }})} /></label>
-            </div>
-
-            <div style={{ marginTop:10 }}>
-              <label>Notes (local UI only)<textarea style={{ width:"100%", minHeight:80 }} value={(selected as any).desc||""} onChange={e=>updateSelected({ } as any)} /></label>
-              <label>Description (prompt)
-                <textarea rows={4} style={{ width:"100%" }}
-                  value={selected.meta?.description ?? (YC_DESCRIPTIONS[(selected.kind||"") as string]?.description || "")}
-                  onChange={e=>updateSelected({ meta:{ ...(selected.meta||{}), description:e.target.value } as any })}
-                />
+            </>) : <span style={{ color:"var(--ink-dim)" }}>Select an object</span>}
+          </div>
+        </div>
+        <div className="panel" style={{ padding:10, marginBottom:8 }}>
+          <b>Materials</b>
+          <div style={{ marginTop:8 }}>
+            {selected ? (<>
+              <label>Description
+                <textarea rows={4} style={{ width:"100%" }} value={selected.meta?.description ?? (YC_DESCRIPTIONS[(selected.kind||"") as string]?.description || "")} onChange={e=>updateSelected({ meta:{ ...(selected.meta||{}), description:e.target.value } as any })} />
               </label>
               <div style={{ marginTop:6 }}>
                 <div>Object reference images</div>
-                <input type="file" accept="image/*" multiple onChange={async e=>{ const files = e.target.files; if(!files) return; const urls = await Promise.all([...files].map(f=> new Promise<string>(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result as string); fr.readAsDataURL(f); }))); updateSelected({} as any); }}/>
-                <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:8 }}>
-                  {(((selected as any).images)||[]).map((s:any,i:number)=><img key={i} src={s} style={{ width:60, height:60, objectFit:"cover", borderRadius:6, border:"1px solid #232833" }}/>)}
-                </div>
-                <button style={{ marginTop:6 }} onClick={()=>autoDescribeObject(selected)}>Auto-Describe from refs</button>
+                <input type="file" accept="image/*" multiple onChange={async e=>{ const files = e.target.files; if(!files) return; const urls = await Promise.all([...files].map(f=> new Promise<string>(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result as string); fr.readAsDataURL(f); }))); updateSelected({ } as any); }}/>
+                <button className="btn-ghost" style={{ marginTop:6 }} onClick={()=>autoDescribeObject(selected!)}>Auto-Describe from refs</button>
               </div>
-            </div>
-
-            <div style={{ display:"flex", gap:8, marginTop:10 }}>
-              <button onClick={()=>remove(selected.id)}>Delete</button>
-            </div>
-          </>
-        ) : (
-          <div style={{ color:"#9aa3b2" }}>Select an object to edit.</div>
-        )}
-
-        <hr style={{ borderColor:"#232833", margin:"12px 0" }}/>
-        <label>Notes<textarea style={{ width:"100%", minHeight:90 }} value={model.notes||""} onChange={e=>setModel(m=>({...m, notes:e.target.value}))} /></label>
-        <div style={{ marginTop:8 }}>
-          <div>Reference images</div>
-          <input type="file" accept="image/*" multiple onChange={async e=>{ const files = e.target.files; if(!files) return; const urls = await Promise.all([...files].map(f=> new Promise<string>(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result as string); fr.readAsDataURL(f); }))); setModel(m=>({...m, refImages:[...(m.refImages||[]), ...urls]})); }}/>
-          <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:8 }}>
-            {(model.refImages||[]).map((s,i)=><img key={i} src={s} style={{ width:74, height:74, objectFit:"cover", borderRadius:8, border:"1px solid #232833" }}/>)}
+            </>) : <span style={{ color:"var(--ink-dim)" }}>Select an object</span>}
           </div>
         </div>
-        <div style={{ marginTop:8, color:"#c8d1e0", fontSize:12 }}>
-          <strong>Collisions: {collisions.length}</strong>
-          <ul style={{ maxHeight:120, overflow:"auto", paddingLeft:16 }}>
-            {collisions.map((c:any,i:number)=>(
-              <li key={i}>{c.b ? `${(c.a.label||c.a.kind)} ↔ ${(c.b.label||c.b.kind)} — ${c.reason}` : `${(c.a.label||c.a.kind)} — ${c.reason}`}</li>
-            ))}
-          </ul>
+        <div className="panel" style={{ padding:10 }}>
+          <b>Notes</b>
+          <div style={{ marginTop:6 }}>
+            <label>Scene notes<textarea style={{ width:"100%", minHeight:90 }} value={model.notes||""} onChange={e=>setModel(m=>({...m, notes:e.target.value}))} /></label>
+          </div>
         </div>
-      </div>
+      </aside>
     </div>
   );
 }

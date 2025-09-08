@@ -107,19 +107,31 @@ export function defaultYCModel(): SceneModel {
     wallMaterials: { E: "glass", N: "solid", S: "solid", W: "solid" },
     finishes: undefined,
     lighting: undefined,
-    objects: [
-      { id:"table", kind:"table", label:"table", cx:10, cy:7, w:7, d:3, h:2.5, rotation:0 },
-      { id:"chairs_n1", kind:"chair", label:"chair_N1", cx:10-1.25, cy:5.5, w:1.6, d:1.6, h:1.5 },
-      { id:"chairs_n2", kind:"chair", label:"chair_N2", cx:10+1.25, cy:5.5, w:1.6, d:1.6, h:1.5 },
-      { id:"chairs_s1", kind:"chair", label:"chair_S1", cx:10-1.25, cy:8.5, w:1.6, d:1.6, h:1.5 },
-      { id:"chairs_s2", kind:"chair", label:"chair_S2", cx:10+1.25, cy:8.5, w:1.6, d:1.6, h:1.5 },
-      { id:"whiteboard", kind:"whiteboard", label:"whiteboard", cx:1, cy:7, w:6/12*1, d:0.2, h:4/12*1, wall:"W", mount_h:7 },
-      { id:"tv", kind:"tv", label:"tv_65", cx:19, cy:7, w:5.7/12*1, d:0.3, h:3.2/12*1, wall:"E", mount_h:7 },
-      { id:"panels1", kind:"panel", label:"panel1", cx:12, cy:7, w:2, d:0.2, h:4, wall:"N", mount_h:5.5 },
-      { id:"panels2", kind:"panel", label:"panel2", cx:14.5, cy:7, w:2, d:0.2, h:4, wall:"N", mount_h:5.5 },
-      { id:"panels3", kind:"panel", label:"panel3", cx:17, cy:7, w:2, d:0.2, h:4, wall:"N", mount_h:5.5 },
-      { id:"decal", kind:"decal", label:"yc_decal", cx:18.8, cy:7, w:6, d:0.1, h:1, wall:"E", mount_h:4.5 }
-    ],
+    objects: (function(){
+      const roomW = 20, roomD = 14; // mirrors ROOM_TEMPLATES.yc_interview
+      const table = { id:"table", kind:"table", label:"table", cx:10, cy:7, w:7, d:3, h:2.5, rotation:0, layer:"floor" } as SceneObject;
+      const chairW = 1.6, chairD = 1.6;
+      const chairClear = 1.5 + 0.2; // 18" + 0.2 ft margin
+      const northY = table.cy - table.d/2 - (chairD/2) - chairClear;
+      const southY = table.cy + table.d/2 + (chairD/2) + chairClear;
+      const tvW = 5.7/12*1; const tvD = 0.3; const tvX = roomW; // center on E wall
+      const wbW = 6/12*1; const wbD = 0.2;  const wbX = 0;      // center on W wall
+      const panelD = 0.2; const panelY = 0; // center on N wall
+      const decalD = 0.1; const decalY = 9.5; const decalX = roomW; // centered on E wall, spaced from TV
+      return [
+        table,
+        { id:"chairs_n1", kind:"chair", label:"chair_N1", cx:10-1.6, cy:northY, w:chairW, d:chairD, h:1.5, layer:"floor" } as SceneObject,
+        { id:"chairs_n2", kind:"chair", label:"chair_N2", cx:10+1.6, cy:northY, w:chairW, d:chairD, h:1.5, layer:"floor" } as SceneObject,
+        { id:"chairs_s1", kind:"chair", label:"chair_S1", cx:10-1.6, cy:southY, w:chairW, d:chairD, h:1.5, layer:"floor" } as SceneObject,
+        { id:"chairs_s2", kind:"chair", label:"chair_S2", cx:10+1.6, cy:southY, w:chairW, d:chairD, h:1.5, layer:"floor" } as SceneObject,
+        { id:"whiteboard", kind:"whiteboard", label:"whiteboard", cx:wbX, cy:7, w:wbW, d:wbD, h:4/12*1, wall:"W", mount_h:7, layer:"wall" } as SceneObject,
+        { id:"tv", kind:"tv", label:"tv_65", cx:tvX, cy:7, w:tvW, d:tvD, h:3.2/12*1, wall:"E", mount_h:7, layer:"wall" } as SceneObject,
+        { id:"panels1", kind:"panel", label:"panel1", cx:12, cy:panelY, w:2, d:panelD, h:4, wall:"N", mount_h:5.5, layer:"wall", rotation:0 } as SceneObject,
+        { id:"panels2", kind:"panel", label:"panel2", cx:14.5, cy:panelY, w:2, d:panelD, h:4, wall:"N", mount_h:5.5, layer:"wall", rotation:0 } as SceneObject,
+        { id:"panels3", kind:"panel", label:"panel3", cx:17, cy:panelY, w:2, d:panelD, h:4, wall:"N", mount_h:5.5, layer:"wall", rotation:0 } as SceneObject,
+        { id:"decal", kind:"decal", label:"yc_decal", cx:tvX, cy:decalY, w:6, d:decalD, h:1, wall:"E", mount_h:4.5, layer:"wall" } as SceneObject,
+      ];
+    })(),
     notes: "YC interview room baseline.",
     refImages: []
   };

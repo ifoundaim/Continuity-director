@@ -26,9 +26,11 @@ export default function DesignerPage(){
     const j = await r.json(); if(!j.ok) alert(j.error); else alert(`Built ${j.items.length} items. Check .cache/render_kit/`);
   }
   return (
-    <main style={{ padding:20, maxWidth:1500, margin:"0 auto", color:"#e9ecf1" }}>
-      <h1>Setting Designer</h1>
-      <p style={{ color:"#9aa3b2", marginTop:-6 }}>Lay out your room with exact sizes. Export SceneLock JSON and build plates.</p>
+    <main className="max-w-[1500px] mx-auto p-5">
+      <div className="panel p-3 mb-3">
+        <h1 style={{ margin:"4px 0 2px" }}>Setting Designer</h1>
+        <div className="text-ink-dim">Lay out your room with exact sizes. Export SceneLock JSON and build plates.</div>
+      </div>
       <SettingDesigner onExport={exportJSON} onBuildPlates={buildPlates} />
     </main>
   );
