@@ -2,6 +2,11 @@ const ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent";
 
 export async function geminiImageCall(apiKey: string, contents: any) {
+  // Stub mode for demos/tests: return tiny 1x1 PNG
+  if (process.env.STUB_MODE === "1" || process.env.NEXT_PUBLIC_STUB_MODE === "1") {
+    const oneByOnePngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
+    return Buffer.from(oneByOnePngBase64, "base64");
+  }
   const res = await fetch(`${ENDPOINT}?key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

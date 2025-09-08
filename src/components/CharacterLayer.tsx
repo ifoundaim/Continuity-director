@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import type { SceneModel } from "../lib/scene_model";
 import { loadPlacements, savePlacements } from "../lib/placements";
 
-export type CharPlacement = { id:string; name:string; heightCm:number; x:number; y:number; color:string };
+export type CharPlacement = { id:string; name:string; heightCm:number; x:number; y:number; facingDeg?:number; color:string };
 
 function uid(){ return Math.random().toString(36).slice(2,9); }
 
@@ -77,8 +77,38 @@ export default function CharacterLayer({
             <circle r={10} fill={c.color} stroke="#0f1217" strokeWidth={2}/>
             <text y={-14} textAnchor="middle" fontSize={12} fill="#e9ecf1">{c.name}</text>
             <text y={22} textAnchor="middle" fontSize={11} fill="#9aa3b2">{Math.round(c.heightCm)}cm</text>
+            {/* Facing arrow */}
+            {(() => {
+              const ang = ((c.facingDeg ?? 0) - 90) * Math.PI/180; const len = 22;
+              const ax = Math.cos(ang)*len; const ay = Math.sin(ang)*len;
+              return (
+                <g onMouseDown={(e)=>{ e.stopPropagation(); setDragId(c.id+"__rot"); }}>
+                  <defs>
+                    <marker id="charArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+                      <path d="M0,0 L0,6 L9,3 z" fill="#60d394" />
+                    </marker>
+                  </defs>
+                  <line x1={0} y1={0} x2={ax} y2={ay} stroke="#60d394" strokeWidth={2} markerEnd="url(#charArrow)"/>
+                </g>
+              );
+            })()}
             <g transform="translate(16,-16)" onClick={(e)=>{ e.stopPropagation(); if(confirm(`Remove ${c.name}?`)) remove(c.id); }} style={{ cursor:"pointer" }}>
               <rect width={12} height={12} rx={2} fill="#1b2230" stroke="#3a4255"/><text x={6} y={9} textAnchor="middle" fontSize={10} fill="#9aa3b2">×</text>
+            </g>
+            {/* Rotate knob */}
+            <g transform={`translate(${18},${-18})`} style={{ cursor:"grab" }} onMouseDown={(e)=>{
+              e.stopPropagation();
+              const svg = (e.target as any).ownerSVGElement as SVGSVGElement; const rect = svg.getBoundingClientRect();
+              function onMove(ev:MouseEvent){
+                const mx = ev.clientX - rect.left - x; const my = ev.clientY - rect.top - y;
+                const ang = Math.atan2(my, mx) * 180/Math.PI; const deg = Math.round(ang + 90);
+                setChars(list=>list.map(p=> p.id!==c.id ? p : { ...p, facingDeg: ((deg%360)+360)%360 }));
+              }
+              function onUp(){ window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); }
+              window.addEventListener("mousemove", onMove); window.addEventListener("mouseup", onUp);
+            }}>
+              <circle r={9} fill="#7c9cff" />
+              <path d="M -4 -2 L 0 -6 L 4 -2" stroke="white" strokeWidth="2" fill="none" />
             </g>
           </g>
         );

@@ -2,8 +2,10 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import kit from "../../scene/render_kit_v1.json";
 import fs from "fs";
 import path from "path";
-import { buildCharacterSheets, buildElevations, buildFloorPlan, buildPerspectives } from "../../lib/render_kit";
+import { buildCharacterSheets, buildElevations, buildFloorPlan, buildPerspectives, buildRoomRefs } from "../../lib/render_kit";
 import type { CharacterProfile, SettingProfile } from "../../lib/types";
+import { getActiveId, getSetting } from "../../server/settings_fs";
+import { paletteSVG as scenePaletteSVG } from "../../lib/palette_card";
 
 type BuildTargets = ("character_sheets"|"floor_plan"|"elevations"|"perspectives"|"full_pack")[];
 
@@ -43,6 +45,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       manifest.push(...await buildPerspectives(profilesSafe, settingSafe, false));
       manifest.push(...await buildPerspectives(profilesSafe, settingSafe, true));
     }
+
+    // Always append 3 consistent room references after plates when full pack requested
+    if (t.has("full_pack")) {
+      manifest.push(...await buildRoomRefs(profilesSafe, settingSafe));
+    }
+
+    // Also write palette card derived from active setting finishes, if available
+    try {
+      const active = getActiveId();
+      if (active){
+        const doc = getSetting(active);
+        const fin = doc?.model?.finishes;
+        if (fin) {
+          const svg = scenePaletteSVG(fin);
+          const outDir = path.join(process.cwd(), ".cache", "render_kit");
+          fs.mkdirSync(outDir, { recursive: true });
+          fs.writeFileSync(path.join(outDir, "palette_scene.svg"), svg, "utf8");
+          manifest.push({ type:"palette_scene", file: path.join(outDir, "palette_scene.svg") });
+        }
+      }
+    } catch {}
 
     // write a copy of last scene model if provided via settingProfile.description/images only (optional future)
     try {

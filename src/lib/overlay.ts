@@ -3,7 +3,7 @@ import type { SceneModel } from "./scene_model";
 
 // Render a wireframe + stick-figure overlay for a given camera and character placements.
 // Returns dataURL (PNG) to use as the FIRST reference image.
-export function renderOverlayPNG(model: SceneModel, cam: CameraPose, charPlc: { name:string; heightCm:number; x:number; y:number }[], w=1024, h=576){
+export function renderOverlayPNG(model: SceneModel, cam: CameraPose, charPlc: { name:string; heightCm:number; x:number; y:number; facingDeg?:number }[], w=1024, h=576){
   const imgW = w, imgH = h;
   const cnv = document.createElement("canvas"); cnv.width = imgW; cnv.height = imgH;
   const g = cnv.getContext("2d")!;
@@ -69,6 +69,12 @@ export function renderOverlayPNG(model: SceneModel, cam: CameraPose, charPlc: { 
     // label
     g.fillStyle="#cbd3e1"; g.font="12px sans-serif"; g.textAlign="center";
     g.fillText(`${C.name} • ${Math.round(C.heightCm)}cm`, base.x, base.y-6);
+    // facing arrow (2D indicator)
+    if ((C.facingDeg ?? 0) !== 0){
+      const ang = ((C.facingDeg ?? 0) - 90) * Math.PI/180; const len = 18;
+      const ax = base.x + Math.cos(ang)*len; const ay = base.y + Math.sin(ang)*len;
+      g.strokeStyle="#60d394"; g.lineWidth=2; g.beginPath(); g.moveTo(base.x, base.y); g.lineTo(ax, ay); g.stroke();
+    }
   }
 
   // scale bar (ft)

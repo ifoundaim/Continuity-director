@@ -646,9 +646,9 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           <button className="btn" title="Save as new" onClick={()=>saveSettingDoc({ asNew:true })}>Save As…</button>
           <button className="btn" title="Duplicate as new" onClick={()=>{ if (!currentId) return saveSettingDoc({ asNew:true }); saveSettingDoc({ asNew:true }).then(()=>{}); }}>Duplicate</button>
           <div style={{ display:"flex", gap:6, marginLeft:8 }}>
-            {(["plan","iso"] as const).map(t=> (
-              <button key={t} className={`btn-ghost ${activeTab===t ? "btn" : ""}`} title={`Switch to ${t==="plan"?"Floor plan":"Isometric"}`}
-                onClick={()=>setActiveTab(t)}>{t==="plan"?"Floor plan":"Isometric"}</button>
+            {(["plan","elevN","elevS","elevE","elevW","iso"] as const).map(t=> (
+              <button key={t} className={`btn-ghost ${activeTab===t ? "btn" : ""}`} title={`Switch to ${t}`}
+                onClick={()=>setActiveTab(t)}>{t==="plan"?"Floor":t==="iso"?"Isometric":t}</button>
             ))}
           </div>
           <div style={{ flex:1 }} />
@@ -1037,13 +1037,13 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
             // Preview/Export overlay for current camera
             const camPreset = { fov_deg: 50, pos:[6,5.0,5.2] as [number,number,number], look_at:[10,7,4.8] as [number,number,number] };
             const cam: CameraPose = { fovDeg: camPreset.fov_deg, pos:{ x:camPreset.pos[0], y:camPreset.pos[1], z:camPreset.pos[2] }, lookAt:{ x:camPreset.look_at[0], y:camPreset.look_at[1], z:camPreset.look_at[2] }, imgW:1024, imgH:576 };
-            const dataUrl = renderOverlayPNG(model, cam, charPlc.map(c=>({ name:c.name, heightCm:c.heightCm, x:c.x, y:c.y })), 1024, 576);
+            const dataUrl = renderOverlayPNG(model, cam, charPlc.map(c=>({ name:c.name, heightCm:c.heightCm, x:c.x, y:c.y, facingDeg:c.facingDeg })), 1024, 576);
             const a = document.createElement("a"); a.href = dataUrl; a.download = "overlay.png"; a.click();
           }}>Export Overlay (current cam)</button>
           <button onClick={async()=>{
             const camPreset = { fov_deg: 50, pos:[6,5.0,5.2] as [number,number,number], look_at:[10,7,4.8] as [number,number,number] };
             const cam: CameraPose = { fovDeg: camPreset.fov_deg, pos:{ x:camPreset.pos[0], y:camPreset.pos[1], z:camPreset.pos[2] }, lookAt:{ x:camPreset.look_at[0], y:camPreset.look_at[1], z:camPreset.look_at[2] }, imgW:1024, imgH:576 };
-            const overlay = renderOverlayPNG(model, cam, charPlc.map(c=>({ name:c.name, heightCm:c.heightCm, x:c.x, y:c.y })), 1024, 576);
+            const overlay = renderOverlayPNG(model, cam, charPlc.map(c=>({ name:c.name, heightCm:c.heightCm, x:c.x, y:c.y, facingDeg:c.facingDeg })), 1024, 576);
             const r = await fetch("/api/generate", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({
               camera: { fov_deg: cam.fovDeg, pos:[cam.pos.x, cam.pos.y, cam.pos.z], look_at:[cam.lookAt.x, cam.lookAt.y, cam.lookAt.z] },
               overlayBase64: overlay,

@@ -53,6 +53,9 @@ export default function Home() {
   type SettingMeta = { id:string; name:string; updatedAt:number };
   const [settings, setSettings] = useState<SettingMeta[]>([]);
   const [activeSettingId, setActiveSettingId] = useState<string|undefined>(undefined);
+  const [assistantMsg, setAssistantMsg] = useState("");
+  const [usageRemaining, setUsageRemaining] = useState<number|undefined>(undefined);
+  const [shotbook, setShotbook] = useState<{ id:string; camera:any; created_at:number; file:string }[]>([]);
 
   // ---------- validation ----------
   const charValid = profiles.every(p => p.name.trim().length>0 && p.height_cm>0) && profiles.length>0;
@@ -91,6 +94,14 @@ export default function Home() {
       if (j.ok){ setSettings(j.list); setActiveSettingId(j.activeId); }
     })();
   }, []);
+  useEffect(()=>{
+    (async ()=>{ try{ const r = await fetch('/api/quota'); const j = await r.json(); if(j.ok) setUsageRemaining(j.usage?.remaining); } catch{} })();
+  }, []);
+  useEffect(()=>{
+    (async ()=>{
+      try { const r = await fetch("/api/shotbook"); const j = await r.json(); if (j.ok) setShotbook(j.shots||[]); } catch {}
+    })();
+  }, [img]);
 
   // Actions
   const gen = async (preset: keyof typeof cameraPresets) => {
@@ -100,12 +111,13 @@ export default function Home() {
     let overlayBase64: string | null = null;
     let posLock = "";
     if (useOverlayLock && sceneModel && placements?.length){
-      overlayBase64 = renderOverlayPNG(sceneModel, cam, placements.map(p=>({ name:p.name, heightCm:p.heightCm, x:p.x, y:p.y })), 1024, 576);
+      overlayBase64 = renderOverlayPNG(sceneModel, cam, placements.map(p=>({ name:p.name, heightCm:p.heightCm, x:p.x, y:p.y, facingDeg:p.facingDeg })), 1024, 576);
       posLock = positionLockText(placements);
     }
     const r = await fetch("/api/generate", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ camera: presetCam, extra: "Anime style enforced; SceneLock fixed.", profiles, settingProfile: setting, useNearestRefs: useNearest, overlayBase64, charPlacements: placements, positionLock: posLock, settingId: activeSettingId })});
     if (!r.ok) return alert(await r.text());
     const b = await r.arrayBuffer();
+    const remain = r.headers.get('X-Usage-Remaining'); if (remain) setUsageRemaining(+remain);
     setImg(`data:image/png;base64,${Buffer.from(b).toString("base64")}`);
     setStep(4);
   };
@@ -213,6 +225,7 @@ export default function Home() {
           }} />
           <span className="chip">{setting.images_base64?.length || 0} refs</span>
           <label className="inline-note"><input type="checkbox" checked={useNearest} onChange={e=>setUseNearest(e.target.checked)} /> Use nearest past refs</label>
+          <span className="inline-note">Ref order: Palette → Wireframe → Plates → Char refs → Continuity</span>
         </div>
         <div style={{ display:"flex", gap:12, alignItems:"center", marginTop:8 }}>
           <label style={{ display:"flex", alignItems:"center", gap:6 }}>
@@ -259,12 +272,26 @@ export default function Home() {
           <span className="muted">current: {cameraKey}</span>
         </div>
 
+        <details>
+          <summary>Assistant</summary>
+          <div className="row" style={{ marginTop:8 }}>
+            <input className="input" style={{ flex:1, minWidth:280 }} placeholder="e.g., Aim speaking, show glass wall" value={assistantMsg} onChange={e=>setAssistantMsg(e.target.value)} />
+            <button className="btn" onClick={async()=>{
+              const r = await fetch('/api/assistant',{ method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ message: assistantMsg, settingId: activeSettingId })});
+              const j = await r.json(); if (!j.ok) return alert(j.error||'Assistant error');
+              if (j.extra) setSetting(s=>({ ...s, description: [s.description, j.extra].filter(Boolean).join('\n') }));
+              if (j.camera && cameraPresets[j.camera as keyof typeof cameraPresets]) await gen(j.camera);
+            }}>Interpret</button>
+          </div>
+        </details>
+
         <details open>
           <summary>Prompt Preview (free)</summary>
           <div style={{ marginTop:8 }}>
             <div className="muted" style={{ marginBottom:6 }}>
               Characters: {preview?.counts.characters ?? 0} • Setting refs: {preview?.counts.refImages ?? 0} • Char ref images: {preview?.counts.characterImages ?? 0} • Length: {preview?.length ?? 0}
               <button className="btn" style={{ marginLeft:12 }} onClick={()=>navigator.clipboard.writeText(preview?.prompt || "")}>Copy</button>
+              {typeof usageRemaining === 'number' && <span className="inline-note" style={{ marginLeft:12 }}>Budget remaining: {usageRemaining}</span>}
             </div>
             <textarea readOnly className="textarea code" value={preview?.prompt || ""} rows={14} />
           </div>
@@ -273,6 +300,18 @@ export default function Home() {
         <div style={{ marginTop:12 }}>
           {img && <img src={img} style={{ maxWidth:"100%", border:"1px solid var(--line)", borderRadius:12 }} />}
         </div>
+        <details style={{ marginTop:12 }}>
+          <summary>Shotbook</summary>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(160px, 1fr))", gap:10, marginTop:10 }}>
+            {shotbook.map((s,i)=>(
+              <div key={i} style={{ border:"1px solid var(--line)", borderRadius:10, overflow:"hidden" }}>
+                <img src={`/api/shotbook_image?id=${s.id}`} style={{ width:"100%", display:"block" }} />
+                <div style={{ padding:8, fontSize:12, color:"var(--muted)" }}>FOV {s.camera?.fov_deg}</div>
+              </div>
+            ))}
+            {!shotbook.length && <div className="muted" style={{ fontSize:12 }}>No past shots yet.</div>}
+          </div>
+        </details>
       </section>
 
       {/* Step 5: Surgical Edit & Fuse (optional) */}

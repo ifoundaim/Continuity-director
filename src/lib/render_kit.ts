@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import kit from "../scene/render_kit_v1.json";
 import scene from "../scene/yc_room_v1.json";
+import { getActiveId, getSetting } from "../server/settings_fs";
+import { modelToSceneGraph } from "./graph";
 import type { CharacterProfile, SettingProfile } from "./types";
 import { geminiImageCall, textPart, imagePart } from "./gemini";
 import { renderWireframeSVG } from "./wireframe";
@@ -127,9 +129,19 @@ export async function buildPerspectives(profiles: CharacterProfile[], setting: S
   const palette = paletteSVG((kit as any).palette_hex || [], "palette");
   const results:any[] = [];
 
+  // Prefer active SceneLock model if available
+  let graphForKit: any = scene as any;
+  try {
+    const active = getActiveId();
+    if (active){
+      const doc = getSetting(active);
+      if (doc?.model) graphForKit = modelToSceneGraph(doc.model);
+    }
+  } catch {}
+
   for (const cam of cams) {
     const wire = renderWireframeSVG(`perspective FOV ${cam.fov_deg}`);
-    const prompt = shotPrompt(scene as any, cam,
+    const prompt = shotPrompt(graphForKit as any, cam,
       color ? "FULL COLOR plate; neutral lighting; include small scale bar bottom-right." :
               "LINE-ART ONLY plate; include small scale bar bottom-right.",
       stableProfiles(profiles),
@@ -157,6 +169,50 @@ export async function buildPerspectives(profiles: CharacterProfile[], setting: S
 
     // register in continuity memory so future shots can reference these plates
     recordShot(cam, buf);
+    await throttle();
+  }
+  return results;
+}
+
+// Generate 3 consistent room reference images (fixed angles) after plates
+export async function buildRoomRefs(profiles: CharacterProfile[], setting: SettingProfile) {
+  const outDir = path.join(ROOT, "room_refs"); ensureDir(outDir);
+  const palette = paletteSVG((kit as any).palette_hex || [], "palette");
+  const refs: Camera[] = [
+    { fov_deg: 50, pos: [6, 5.0, 5.2], look_at: [10, 7, 4.8] },
+    { fov_deg: 45, pos: [15, 6.0, 5.0], look_at: [10, 7, 4.8] },
+    { fov_deg: 35, pos: [9, 6.5, 3.0], look_at: [10, 7, 4.8] }
+  ];
+  const results:any[] = [];
+
+  // Prefer active SceneLock model
+  let graphForKit: any = scene as any;
+  try {
+    const active = getActiveId();
+    if (active){
+      const doc = getSetting(active);
+      if (doc?.model) graphForKit = modelToSceneGraph(doc.model);
+    }
+  } catch {}
+
+  for (const cam of refs) {
+    const wire = renderWireframeSVG(`reference FOV ${cam.fov_deg}`);
+    const prompt = shotPrompt(graphForKit as any, cam,
+      "REFERENCE: full color, neutral lighting; consistent depiction of room geometry and materials; include small scale bar bottom-right.",
+      stableProfiles(profiles),
+      (setting?.description || "")
+    );
+    const parts:any[] = [];
+    parts.push({ inline_data: { data: Buffer.from(wire.svg).toString("base64"), mime_type: wire.mime } });
+    parts.push(textPart(prompt));
+    for (const b64 of stableImages(setting.images_base64).slice(0,6)) parts.push(imagePart(bufOfDataURL(b64)));
+    for (const p of stableProfiles(profiles)) for (const b64 of (p.images_base64 || []).slice(0,4)) parts.push(imagePart(bufOfDataURL(b64)));
+    parts.push({ inline_data: { data: b64OfSVG(palette.svg), mime_type: palette.mime } });
+    const contents = [{ role: "user", parts }];
+    const buf = await geminiImageCall(process.env.GEMINI_API_KEY!, contents);
+    const file = path.join(outDir, `room_ref_${cam.fov_deg}_${keyOf(cam)}.png`);
+    fs.writeFileSync(file, buf);
+    results.push({ type:"room_ref", fov: cam.fov_deg, file });
     await throttle();
   }
   return results;

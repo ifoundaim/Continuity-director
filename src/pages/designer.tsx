@@ -30,6 +30,9 @@ export default function DesignerPage(){
       <div className="panel p-3 mb-3">
         <h1 style={{ margin:"4px 0 2px" }}>Setting Designer</h1>
         <div className="text-ink-dim">Lay out your room with exact sizes. Export SceneLock JSON and build plates.</div>
+        <div style={{ marginTop:8 }}>
+          <a href="/" style={{ color:"#7c9cff", fontSize:12 }}>← Back to Continuity Director</a>
+        </div>
       </div>
       <SettingDesigner onExport={exportJSON} onBuildPlates={buildPlates} />
     </main>
