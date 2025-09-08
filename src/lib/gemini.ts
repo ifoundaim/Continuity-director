@@ -27,13 +27,24 @@ export async function geminiImageCall(apiKey: string, contents: any) {
       }
     }
   } catch {}
-  const res = await fetch(`${ENDPOINT}?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ contents })
-  });
-  if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text()}`);
-  const json = await res.json();
+  // Basic retry with exponential backoff to avoid long stalls
+  let lastErr: any = null; let json: any = null;
+  for (let attempt=0; attempt<3; attempt++){
+    try{
+      const res = await fetch(`${ENDPOINT}?key=${apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents })
+      });
+      if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text()}`);
+      json = await res.json();
+      lastErr = null; break;
+    } catch(e:any){
+      lastErr = e; const wait = 800 * Math.pow(2, attempt);
+      await new Promise(r=>setTimeout(r, wait));
+    }
+  }
+  if (!json) throw lastErr || new Error("Gemini request failed");
   const parts = json.candidates?.[0]?.content?.parts || [];
   const imgPart = parts.find((p: any) =>
     (p.inline_data?.mime_type?.startsWith("image/")) ||
