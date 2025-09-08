@@ -31,8 +31,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json({ ok:true, dryRun:true, plan });
     }
 
-    // reset status log
-    try{ const outDir = path.join(process.cwd(), ".cache", "render_kit"); fs.mkdirSync(outDir,{recursive:true}); fs.writeFileSync(path.join(outDir, "status.json"), "[]"); }catch{}
+    // reset status log and mark start
+    try{
+      const outDir = path.join(process.cwd(), ".cache", "render_kit");
+      fs.mkdirSync(outDir,{recursive:true});
+      const status = path.join(outDir, "status.json");
+      fs.writeFileSync(status, "[]");
+      const list = [{ ts: Date.now(), message: `started: ${[...t].join(',')}` }];
+      fs.writeFileSync(status, JSON.stringify(list, null, 2));
+    }catch{}
 
     if (t.has("character_sheets") || t.has("full_pack")) {
       manifest.push(...await buildCharacterSheets(profilesSafe, settingSafe));
@@ -75,8 +82,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const cacheDir = path.join(process.cwd(), ".cache"); fs.mkdirSync(cacheDir, { recursive: true });
       // If a user previously exported SceneLock JSON to .cache/setting_model.json, prefer that elsewhere
     } catch {}
+    try{
+      const outDir = path.join(process.cwd(), ".cache", "render_kit");
+      const status = path.join(outDir, "status.json");
+      const list = fs.existsSync(status)? JSON.parse(fs.readFileSync(status,"utf-8")) : [];
+      list.push({ ts: Date.now(), message: `done: ${manifest.length} files` });
+      fs.writeFileSync(status, JSON.stringify(list, null, 2));
+    }catch{}
     res.json({ ok:true, items: manifest });
   } catch (e:any) {
+    try{
+      const outDir = path.join(process.cwd(), ".cache", "render_kit");
+      fs.mkdirSync(outDir,{recursive:true});
+      const status = path.join(outDir, "status.json");
+      const list = fs.existsSync(status)? JSON.parse(fs.readFileSync(status,"utf-8")) : [];
+      list.push({ ts: Date.now(), message: `error: ${e?.message || 'unknown'}` });
+      fs.writeFileSync(status, JSON.stringify(list, null, 2));
+    }catch{}
     res.status(500).json({ ok:false, error: e.message });
   }
 }

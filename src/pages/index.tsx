@@ -104,6 +104,10 @@ export default function Home() {
   useEffect(()=>{
     (async ()=>{ try{ const r = await fetch('/api/quota'); const j = await r.json(); if(j.ok) setUsageRemaining(j.usage?.remaining); } catch{} })();
   }, []);
+  // initial status poll on mount
+  useEffect(()=>{
+    (async ()=>{ try{ const r = await fetch('/api/build_status'); const j = await r.json(); if(j.ok) setBuildStatus({ running:j.running, itemsDone:j.itemsDone, lastMessage:j.lastMessage }); } catch{} })();
+  }, []);
   // poll build status while running
   useEffect(()=>{
     let t:any;
