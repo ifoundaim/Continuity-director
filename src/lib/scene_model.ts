@@ -50,6 +50,61 @@ export type Lighting = {
   style?: "even_panel" | "spot_key_fill";
 };
 
+// ---- New first-class locks ----
+export type DoorDecal = {
+  svg_id?: string;
+  png_ref?: string;
+  cx_ft: number;
+  cy_ft: number;
+  scale: number;     // 1.0 = as-authored
+  hex?: string;      // tint/overlay color
+};
+
+export type DoorLock = {
+  id: string;                    // e.g., door_1
+  wall: "N"|"E"|"S"|"W";       // wall normal facing into room
+  cx_ft: number;                 // door leaf center (plan)
+  cy_ft: number;
+  width_in: number;              // door leaf width (in)
+  height_in: number;             // door leaf height (in)
+  thickness_in: number;          // door thickness (in)
+  hinge: "left"|"right";        // hinge side when viewed from the room
+  swing_deg: number;             // 0 closed, 90 open
+  glass: boolean;                // glass leaf (mullions may be drawn elsewhere)
+  frame_hex?: string;            // frame/stile tint
+  decal?: DoorDecal;             // optional decal overlay near door
+};
+
+export type CarpetTilesRule = {
+  tile_w_in: number;             // 24 typical
+  tile_h_in: number;             // 24 typical
+  rotation_deg: 0|90;            // orientation
+  accent_hex_list?: string[];    // ["#FF6D00"]
+  accent_rule?: "every_nth"|"stripe"|"checker"|"custom_map";
+  accent_n?: number;             // if every_nth
+  stripe_w_in?: number;          // if stripe
+  grout_hex?: string;            // optional seam tint
+  grout_w_in?: number;           // optional seam width
+};
+
+export type RugOnConcrete = {
+  rug_w_ft: number; rug_d_ft: number;
+  cx_ft: number; cy_ft: number;
+  border_hex: string; field_hex: string;
+  tile_hint_in?: number;         // suggest weave scale
+};
+
+export type CarpetLock =
+  | ({ pattern: "carpet_tiles" } & CarpetTilesRule)
+  | ({ pattern: "broadloom" })
+  | ({ pattern: "rug_on_concrete" } & RugOnConcrete);
+
+export type ExposureLock = {
+  white_balance_K: number;       // e.g., 4300
+  ev_target?: string | number;   // e.g., 500_lux_equiv or numeric
+  contrast: "low"|"neutral";
+};
+
 export type DetectedObject = {
   kind: "table"|"chair"|"panel"|"whiteboard"|"tv"|"decal"|"plant"|"grommet"|"unknown";
   label?: string;
@@ -74,6 +129,11 @@ export type SceneModel = {
   wallMaterials?: { N?:"solid"|"glass"; S?:"solid"|"glass"; E?:"solid"|"glass"; W?:"solid"|"glass" };
   finishes?: Finishes;        // NEW
   lighting?: Lighting;        // NEW
+  // New first-class locks
+  doors?: DoorLock[];         // persisted and exported
+  carpet?: CarpetLock;        // floor pattern lock
+  exposure_lock?: ExposureLock; // global exposure/contrast lock
+  finishes_version_id?: string; // bump when finishes change
   objects: SceneObject[];
   // compatibility fields used elsewhere in the app
   units?: Units;
@@ -115,6 +175,11 @@ export function defaultYCModel(): SceneModel {
       notes: "YC aesthetic: clean, modern, minimal; YC orange used sparingly as stripe/decal."
     },
     lighting: { cctK: 4300, lux: 500, contrast: "neutral", style: "even_panel" },
+    // Defaults for new locks
+    finishes_version_id: "finishes_v1",
+    doors: [],
+    carpet: { pattern: "carpet_tiles", tile_w_in: 24, tile_h_in: 24, rotation_deg: 90, accent_hex_list: ["#FF6D00"], accent_rule: "every_nth", accent_n: 8, grout_hex: "#2E3135", grout_w_in: 0.2 },
+    exposure_lock: { white_balance_K: 4300, ev_target: "neutral", contrast: "neutral" },
     objects: (function(){
       const roomW = 20, roomD = 14; // mirrors ROOM_TEMPLATES.yc_interview
       const table = { id:"table", kind:"table", label:"table", cx:10, cy:7, w:7, d:3, h:2.5, rotation:0, layer:"floor" } as SceneObject;

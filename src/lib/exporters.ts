@@ -1,7 +1,22 @@
 import { SceneModel } from "./scene_model";
 
 export function exportSceneLockJSON(model: SceneModel){
-  return JSON.stringify({ scene_id:"yc_room_v1", units:model.units, room:model.room, objects:model.objects, notes:model.notes }, null, 2);
+  // Export full SceneLock including new first-class locks for determinism
+  const out: any = {
+    scene_id: model.name || "yc_room_v1",
+    units: model.units,
+    room: model.room,
+    wallMaterials: model.wallMaterials,
+    finishes: model.finishes,
+    lighting: model.lighting,
+    finishes_version_id: model.finishes_version_id,
+    doors: (model.doors||[]),
+    carpet: model.carpet,
+    exposure_lock: model.exposure_lock,
+    objects: model.objects,
+    notes: model.notes
+  };
+  return JSON.stringify(out, null, 2);
 }
 
 // Minimal shapes for iso rendering

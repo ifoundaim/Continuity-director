@@ -10,7 +10,7 @@ export function modelToSceneGraph(model: SceneModel): SceneGraph {
     scene_id: model.name || "yc_room_v1",
     units: model.units || "ft",
     room: { width: model.room.width, depth: model.room.depth, height: model.room.height },
-    lighting: { key: "overhead_led_center", color_temp_k: (model.lighting?.cctK || 4300), window_side: "glass_wall_right" },
+    lighting: { key: "overhead_led_center", color_temp_k: (model.exposure_lock?.white_balance_K || model.lighting?.cctK || 4300), window_side: "glass_wall_right" },
     objects: [],
     scale_anchors: {
       aim_height_cm: 170,

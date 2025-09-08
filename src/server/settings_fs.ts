@@ -50,6 +50,11 @@ export function saveSetting(id: string, name: string, model: any){
         if (!o.meta.styleTokens) o.meta.styleTokens = YC_DESCRIPTIONS[mapKey].styleTokens;
       }
     }
+    // Ensure new locks have sensible defaults for backward-compat
+    if (!model.finishes_version_id) model.finishes_version_id = "finishes_v1";
+    if (!model.doors) model.doors = [];
+    if (!model.carpet) model.carpet = { pattern: "carpet_tiles", tile_w_in: 24, tile_h_in: 24, rotation_deg: 90, accent_hex_list:["#FF6D00"], accent_rule:"every_nth", accent_n:8, grout_hex: "#2E3135", grout_w_in: 0.2 };
+    if (!model.exposure_lock) model.exposure_lock = { white_balance_K: model?.lighting?.cctK || 4300, ev_target: "neutral", contrast: "neutral" };
   } catch {}
   const p = path.join(ROOT, `${id}.json`);
   const data = { id, name, model };

@@ -63,6 +63,7 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   const [showWarnings, setShowWarnings] = useState(true);
   const [showErrors, setShowErrors] = useState(true);
   const [showGuides, setShowGuides] = useState(true);
+  const [showPatterns, setShowPatterns] = useState(false);
   const [showProposals, setShowProposals] = useState(true);
   useEffect(()=>{ setCollisions(detectCollisions(model)); }, [model]);
   const containerRef = useRef<HTMLDivElement|null>(null);
@@ -363,6 +364,26 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
     if (k === "whiteboard") return add("whiteboard");
     if (k === "plant") return add("plant");
     if (k === "decal") return add("decal");
+    if (k === "preset a" || k === "preset_a") {
+      // Apply Preset A (glass door, carpet tiles)
+      setModel(m=>({
+        ...m,
+        finishes_version_id: "finishes_vA",
+        doors: [{ id:"door_1", wall:"E", cx_ft:m.room.width-1, cy_ft:m.room.depth/2, width_in:36, height_in:84, thickness_in:2, hinge:"right", swing_deg:90, glass:true, frame_hex: m.finishes?.mullionHex || "#1C1F22"}],
+        carpet: { pattern:"carpet_tiles", tile_w_in:24, tile_h_in:24, rotation_deg:90, accent_hex_list:["#FF6D00"], accent_rule:"every_nth", accent_n:8, grout_hex:"#2E3135", grout_w_in:0.2 }
+      }));
+      return;
+    }
+    if (k === "preset b" || k === "preset_b") {
+      // Apply Preset B (solid door, rug)
+      setModel(m=>({
+        ...m,
+        finishes_version_id: "finishes_vB",
+        doors: [{ id:"door_1", wall:"E", cx_ft:m.room.width-1, cy_ft:m.room.depth/2, width_in:36, height_in:84, thickness_in:2, hinge:"left", swing_deg:45, glass:false, frame_hex: m.finishes?.mullionHex || "#1C1F22"}],
+        carpet: { pattern:"rug_on_concrete", rug_w_ft:9, rug_d_ft:12, cx_ft:(m.room.width/2), cy_ft:(m.room.depth/2), border_hex:"#2E3135", field_hex:"#3A3E42" }
+      }));
+      return;
+    }
     if (k === "custom") return addCustom();
   }
 
@@ -657,7 +678,120 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           <div className="section-body">
             <label><input type="checkbox" checked={showCollisions} onChange={e=>setShowCollisions(e.target.checked)} /> Show collisions</label><br/>
             <label><input type="checkbox" checked={showGuides} onChange={e=>setShowGuides(e.target.checked)} /> Show guides</label><br/>
-            <label><input type="checkbox" checked={showProposals} onChange={e=>setShowProposals(e.target.checked)} /> Show proposals</label>
+            <label><input type="checkbox" checked={showProposals} onChange={e=>setShowProposals(e.target.checked)} /> Show proposals</label><br/>
+            <label><input type="checkbox" checked={showPatterns} onChange={e=>setShowPatterns(e.target.checked)} /> Show patterns</label>
+          </div>
+        </details>
+        <details className="panel compact">
+          <summary>Consistency Locks</summary>
+          <div className="section-body" style={{ display:"grid", gap:8 }}>
+            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+              <button className="btn" onClick={(ev)=>{
+                ev.preventDefault();
+                setModel(m=>{
+                  const doorExists = (m.doors||[]).length>0;
+                  const mull = m.finishes?.mullionHex || "#1C1F22";
+                  const glassEast = (m.wallMaterials?.E === "glass");
+                  const newDoors = doorExists ? (m.doors||[]) : [{
+                    id: "door_1",
+                    wall: "E" as const,
+                    cx_ft: m.room.width - 1,
+                    cy_ft: m.room.depth/2,
+                    width_in: 36,
+                    height_in: 84,
+                    thickness_in: 2,
+                    hinge: "right" as const,
+                    swing_deg: 90,
+                    glass: glassEast ?? true,
+                    frame_hex: mull
+                  }];
+                  const accent = m.finishes?.accentHex || "#FF6D00";
+                  const grout = mull;
+                  const newCarpet:any = (m.carpet as any)?.pattern ? m.carpet : {
+                    pattern: "carpet_tiles",
+                    tile_w_in: 24, tile_h_in: 24,
+                    rotation_deg: 90 as any,
+                    accent_hex_list: [accent],
+                    accent_rule: "every_nth",
+                    accent_n: 8,
+                    grout_hex: grout,
+                    grout_w_in: 0.2
+                  };
+                  const newExposure:any = m.exposure_lock || { white_balance_K: m.lighting?.cctK || 4300, ev_target: "neutral", contrast: "neutral" };
+                  const finV = m.finishes_version_id || "finishes_v1";
+                  return { ...m, doors: newDoors, carpet: newCarpet, exposure_lock: newExposure, finishes_version_id: finV } as any;
+                });
+              }}>Auto-fill locks</button>
+              <span className="inline-note">Fills door, carpet, exposure, and finishes_v from current setting.</span>
+            </div>
+            <div>
+              <b>Doors</b>
+              <div style={{ display:"grid", gap:6, marginTop:6 }}>
+                {(model.doors||[]).map((d,i)=> (
+                  <div key={i} className="panel" style={{ padding:8 }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"repeat(6, minmax(110px,1fr))", gap:6 }}>
+                      <label>ID<input value={d.id} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, id:e.target.value }: x)}))} /></label>
+                      <label>Wall<select value={d.wall} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, wall:(e.target.value as any) }: x)}))}><option>N</option><option>E</option><option>S</option><option>W</option></select></label>
+                      <label>Center X (ft)<input type="number" step={0.1} value={d.cx_ft} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, cx_ft:+e.target.value }: x)}))} /></label>
+                      <label>Center Y (ft)<input type="number" step={0.1} value={d.cy_ft} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, cy_ft:+e.target.value }: x)}))} /></label>
+                      <label>Width (in)<input type="number" step={1} value={d.width_in} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, width_in:+e.target.value }: x)}))} /></label>
+                      <label>Height (in)<input type="number" step={1} value={d.height_in} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, height_in:+e.target.value }: x)}))} /></label>
+                      <label>Thick (in)<input type="number" step={0.1} value={d.thickness_in} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, thickness_in:+e.target.value }: x)}))} /></label>
+                      <label>Hinge<select value={d.hinge} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, hinge:(e.target.value as any) }: x)}))}><option>left</option><option>right</option></select></label>
+                      <label>Swing (°)<input type="number" step={5} value={d.swing_deg} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, swing_deg:+e.target.value }: x)}))} /></label>
+                      <label>Glass<select value={d.glass?"yes":"no"} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, glass:(e.target.value==="yes") }: x)}))}><option value="no">no</option><option value="yes">yes</option></select></label>
+                      <label>Frame<input type="color" value={d.frame_hex||"#1C1F22"} onChange={e=>setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, frame_hex:e.target.value }: x)}))} /></label>
+                    </div>
+                    <div style={{ display:"flex", gap:6, marginTop:6 }}>
+                      <button className="btn-ghost" onClick={(ev)=>{ ev.preventDefault(); setModel(m=>({ ...m, doors:(m.doors||[]).map((x,j)=> j===i? { ...x, hinge:(x.hinge==="left"?"right":"left") }: x)})); }}>Flip hinge</button>
+                      <button className="btn-ghost" onClick={(ev)=>{ ev.preventDefault(); setModel(m=>({ ...m, doors:(m.doors||[]).filter((_,j)=> j!==i) })); }}>Remove</button>
+                    </div>
+                  </div>
+                ))}
+                <button className="btn" onClick={(ev)=>{ ev.preventDefault(); setModel(m=>({ ...m, doors:[...(m.doors||[]), { id:`door_${(m.doors?.length||0)+1}`, wall:"E", cx_ft:m.room.width-1, cy_ft:m.room.depth/2, width_in:36, height_in:84, thickness_in:2, hinge:"right", swing_deg:90, glass:true, frame_hex:"#1C1F22" }] })); }}>Add door</button>
+              </div>
+            </div>
+            <div>
+              <b>Floor (Carpet/Floor Lock)</b>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(6, minmax(110px,1fr))", gap:6, marginTop:6 }}>
+                <label>Pattern<select value={(model.carpet as any)?.pattern||"carpet_tiles"} onChange={e=>{
+                  const pat = e.target.value as any;
+                  setModel(m=>({ ...m, carpet: pat==="carpet_tiles" ? { pattern:pat, tile_w_in:24, tile_h_in:24, rotation_deg:90, accent_hex_list:["#FF6D00"], accent_rule:"every_nth", accent_n:8, grout_hex:"#2E3135", grout_w_in:0.2 } : pat==="rug_on_concrete" ? { pattern:pat, rug_w_ft:9, rug_d_ft:12, cx_ft:(m.room.width/2), cy_ft:(m.room.depth/2), border_hex:"#2E3135", field_hex:"#3A3E42" } : { pattern:pat } as any }));
+                }}><option value="carpet_tiles">carpet_tiles</option><option value="broadloom">broadloom</option><option value="rug_on_concrete">rug_on_concrete</option></select></label>
+                {(model.carpet as any)?.pattern==="carpet_tiles" && (<>
+                  <label>Tile W (in)<input type="number" step={1} value={(model.carpet as any).tile_w_in||24} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), tile_w_in:+e.target.value } as any }))} /></label>
+                  <label>Tile H (in)<input type="number" step={1} value={(model.carpet as any).tile_h_in||24} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), tile_h_in:+e.target.value } as any }))} /></label>
+                  <label>Rotation<select value={(model.carpet as any).rotation_deg||90} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), rotation_deg:(+e.target.value as any) } as any }))}><option value={0}>0</option><option value={90}>90</option></select></label>
+                  <label>Accent rule<select value={(model.carpet as any).accent_rule||"every_nth"} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), accent_rule:(e.target.value as any) } as any }))}><option>every_nth</option><option>stripe</option><option>checker</option><option>custom_map</option></select></label>
+                  <label>N / stripe W<input type="number" step={1} value={(model.carpet as any).accent_n||((model.carpet as any).stripe_w_in||0)} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), accent_n:+e.target.value, stripe_w_in:+e.target.value } as any }))} /></label>
+                  <label>Accent hexes<input value={((model.carpet as any).accent_hex_list||[]).join(",")} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), accent_hex_list: e.target.value.split(",").map(s=>s.trim()).filter(Boolean) } as any }))} /></label>
+                  <label>Grout<input type="color" value={(model.carpet as any).grout_hex||"#2E3135"} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), grout_hex: e.target.value } as any }))} /></label>
+                  <label>Grout W (in)<input type="number" step={0.1} value={(model.carpet as any).grout_w_in||0} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), grout_w_in:+e.target.value } as any }))} /></label>
+                </>)}
+                {(model.carpet as any)?.pattern==="rug_on_concrete" && (<>
+                  <label>Rug W (ft)<input type="number" step={0.5} value={(model.carpet as any).rug_w_ft||9} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), rug_w_ft:+e.target.value } as any }))} /></label>
+                  <label>Rug D (ft)<input type="number" step={0.5} value={(model.carpet as any).rug_d_ft||12} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), rug_d_ft:+e.target.value } as any }))} /></label>
+                  <label>Center X<input type="number" step={0.1} value={(model.carpet as any).cx_ft|| (model.room.width/2)} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), cx_ft:+e.target.value } as any }))} /></label>
+                  <label>Center Y<input type="number" step={0.1} value={(model.carpet as any).cy_ft|| (model.room.depth/2)} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), cy_ft:+e.target.value } as any }))} /></label>
+                  <label>Border<input type="color" value={(model.carpet as any).border_hex||"#2E3135"} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), border_hex:e.target.value } as any }))} /></label>
+                  <label>Field<input type="color" value={(model.carpet as any).field_hex||"#3A3E42"} onChange={e=>setModel(m=>({ ...m, carpet:{ ...(m.carpet as any), field_hex:e.target.value } as any }))} /></label>
+                </>)}
+              </div>
+            </div>
+            <div>
+              <b>Exposure lock</b>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(6, minmax(110px,1fr))", gap:6, marginTop:6 }}>
+                <label>WB (K)<input type="number" step={50} value={model.exposure_lock?.white_balance_K||4300} onChange={e=>setModel(m=>({ ...m, exposure_lock:{ ...(m.exposure_lock||{}), white_balance_K:+e.target.value } as any }))} /></label>
+                <label>EV target<input value={String(model.exposure_lock?.ev_target||"neutral")} onChange={e=>setModel(m=>({ ...m, exposure_lock:{ ...(m.exposure_lock||{}), ev_target:e.target.value } as any }))} /></label>
+                <label>Contrast<select value={model.exposure_lock?.contrast||"neutral"} onChange={e=>setModel(m=>({ ...m, exposure_lock:{ ...(m.exposure_lock||{}), contrast:(e.target.value as any) } as any }))}><option>low</option><option>neutral</option></select></label>
+              </div>
+            </div>
+            <div>
+              <b>Finishes version</b>
+              <div style={{ display:"grid", gridTemplateColumns:"minmax(220px, 1fr)", gap:6, marginTop:6 }}>
+                <label>ID<input value={model.finishes_version_id||"finishes_v1"} onChange={e=>setModel(m=>({ ...m, finishes_version_id:e.target.value }))} /></label>
+              </div>
+            </div>
           </div>
         </details>
         <details className="panel compact">
@@ -669,6 +803,28 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
               <option value="standard">Standard (20×14 ft, 84×36 table)</option>
               <option value="compact">Compact (18×12 ft, 72×36 table)</option>
             </select>
+          </div>
+        </details>
+        <details className="panel compact">
+          <summary>Room Plate presets</summary>
+          <div className="section-body" style={{ display:"grid", gap:6 }}>
+            <div style={{ fontSize:12, color:"var(--ink-dim)" }}>Apply A/B presets (no characters): doors + carpet + finishes_v.</div>
+            <button className="btn" onClick={()=>{
+              setModel(m=>({
+                ...m,
+                finishes_version_id: "finishes_vA",
+                doors: [{ id:"door_1", wall:"E", cx_ft:m.room.width-1, cy_ft:m.room.depth/2, width_in:36, height_in:84, thickness_in:2, hinge:"right", swing_deg:90, glass:true, frame_hex: m.finishes?.mullionHex || "#1C1F22" }],
+                carpet: { pattern:"carpet_tiles", tile_w_in:24, tile_h_in:24, rotation_deg:90, accent_hex_list:["#FF6D00"], accent_rule:"every_nth", accent_n:8, grout_hex:"#2E3135", grout_w_in:0.2 }
+              }));
+            }}>Preset A — glass door + carpet tiles</button>
+            <button className="btn" onClick={()=>{
+              setModel(m=>({
+                ...m,
+                finishes_version_id: "finishes_vB",
+                doors: [{ id:"door_1", wall:"E", cx_ft:m.room.width-1, cy_ft:m.room.depth/2, width_in:36, height_in:84, thickness_in:2, hinge:"left", swing_deg:45, glass:false, frame_hex: m.finishes?.mullionHex || "#1C1F22" }],
+                carpet: { pattern:"rug_on_concrete", rug_w_ft:9, rug_d_ft:12, cx_ft:(m.room.width/2), cy_ft:(m.room.depth/2), border_hex:"#2E3135", field_hex:"#3A3E42" }
+              }));
+            }}>Preset B — solid door + rug</button>
           </div>
         </details>
       </aside>
@@ -692,6 +848,19 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           <div className="badge" title="Collision status" style={{ background: errs?"rgba(239,68,68,0.15)":(warns?"rgba(245,158,11,0.15)":"rgba(52,211,153,0.12)"), borderColor: errs?"var(--err)":(warns?"var(--warn)":"var(--chip-border)"), color: errs?"var(--err)":(warns?"var(--warn)":"#7bd7b2") }}>
             {errs? `${errs} error${errs>1?"s":""}` : warns? `${warns} warning${warns>1?"s":""}` : "Collisions: 0"}
           </div>
+          {(()=>{
+            const hasMullions = !!model.finishes?.mullionHex || !!(model.meta as any)?.glassE;
+            const hasDoor = (model.doors||[]).length>0;
+            const hasCarpet = !!model.carpet;
+            const hasPanels = model.objects.some((o:any)=>o.kind==="panel");
+            const finV = model.finishes_version_id || "v?";
+            const ok = hasMullions && hasDoor && hasCarpet && hasPanels && !!finV;
+            return (
+              <div className="badge" title="Consistency locks" style={{ background: ok?"rgba(52,211,153,0.12)":"rgba(245,158,11,0.12)", borderColor: ok?"var(--chip-border)":"var(--warn)", color: ok?"#7bd7b2":"var(--warn)" }}>
+                {`Room Consistency: ${["mullions","door","carpet","panels",`finishes_${finV}`].join(" | ")}`}
+              </div>
+            );
+          })()}
           <div className="badge" title="Zoom level">Zoom {Math.round(zoom*100)}%</div>
           <button className="btn-ghost" title="Fit to room" onClick={zoomFit}>Fit</button>
           <button className="btn-ghost" title="Zoom 100%" onClick={zoom100}>100%</button>
@@ -956,6 +1125,27 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
                   </g>
                 );
               })}
+              {/* Carpet pattern preview */}
+              {showPatterns && (model.carpet as any)?.pattern==="carpet_tiles" && ((()=>{
+                const c:any = model.carpet as any; const twft = (c.tile_w_in||24)/12; const thft = (c.tile_h_in||24)/12;
+                const cols = Math.ceil(model.room.width / twft); const rows = Math.ceil(model.room.depth / thft);
+                const everyN = c.accent_rule==="every_nth" ? (c.accent_n||0) : 0; const accent = (c.accent_hex_list||[])[0]||"#FF6D00";
+                const base = (model.finishes as any)?.floor?.baseHex || "#2E3135"; const grout = c.grout_hex||"#2E3135";
+                const tiles: any[] = [];
+                for(let r=0;r<rows;r++){
+                  for(let i=0;i<cols;i++){
+                    const isAccent = everyN>0 && ((i+r)%everyN===0);
+                    tiles.push({ x: i*twft, y:r*thft, w:twft, h:thft, fill: isAccent? accent: base });
+                  }
+                }
+                return (
+                  <g>
+                    {tiles.map((t,idx)=> (
+                      <rect key={idx} x={toCanvasX(t.x)} y={toCanvasY(t.y)} width={toPx(t.w)} height={toPx(t.h)} fill={t.fill} opacity={0.2} stroke={grout} strokeWidth={0.5} />
+                    ))}
+                  </g>
+                );
+              })())}
               {/* Character markers */}
               <CharacterLayer
                 model={model}

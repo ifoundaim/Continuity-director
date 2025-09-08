@@ -11,6 +11,9 @@ export const PRESETS: Preset[] = [
   { name: "Whiteboard 72x48", make: () => ({ id: uid(), kind:"whiteboard", label:"whiteboard", cx:1, cy:7, w:6/12, d:0.2, h:4/12, wall:"W", mount_h:7 }) },
   { name: "Acoustic Panel 24x48", make: () => ({ id: uid(), kind:"panel", label:"panel", cx:14, cy:7, w:2, d:0.2, h:4, wall:"N", mount_h:5.5 }) },
   { name: "YC Decal Strip", make: () => ({ id: uid(), kind:"decal", label:"yc_decal", cx:18.8, cy:7, w:6, d:0.1, h:1, wall:"E", mount_h:4.5 }) },
+  // Room plates presets (no characters)
+  { name: "Preset A (glass door + tiles)", make: () => ({ id: uid(), kind:"custom", label:"preset_A", cx:0, cy:0, w:0.1, d:0.1 }) as any },
+  { name: "Preset B (solid door + rug)", make: () => ({ id: uid(), kind:"custom", label:"preset_B", cx:0, cy:0, w:0.1, d:0.1 }) as any },
 ];
 
 export function applyPreset(presetName: string): SceneObject | null {

@@ -63,6 +63,7 @@ export default function Home() {
   const [usageRemaining, setUsageRemaining] = useState<number|undefined>(undefined);
   const [shotbook, setShotbook] = useState<{ id:string; camera:any; created_at:number; file:string }[]>([]);
   const [buildStatus, setBuildStatus] = useState<{ running:boolean; itemsDone:number; lastMessage:string|null }|null>(null);
+  const [shotStatus, setShotStatus] = useState<{ running:boolean; cache?:"HIT"|"MISS"|null; message?:string|null } | null>({ running:false, cache:null, message:null });
 
   // ---------- validation ----------
   const charValid = profiles.every(p => p.name.trim().length>0 && p.height_cm>0) && profiles.length>0;
@@ -108,17 +109,23 @@ export default function Home() {
   useEffect(()=>{
     (async ()=>{ try{ const r = await fetch('/api/build_status'); const j = await r.json(); if(j.ok) setBuildStatus({ running:j.running, itemsDone:j.itemsDone, lastMessage:j.lastMessage }); } catch{} })();
   }, []);
-  // poll build status while running
+  // poll build status while running (decoupled from image state)
   useEffect(()=>{
     let t:any;
     async function poll(){
-      try{ const r = await fetch('/api/build_status'); const j = await r.json(); if(j.ok){ setBuildStatus({ running:j.running, itemsDone:j.itemsDone, lastMessage:j.lastMessage }); if(j.running){ t=setTimeout(poll, 1200); } else { // finished; refresh shotbook
-        try{ const r2 = await fetch('/api/shotbook'); const j2 = await r2.json(); if (j2.ok) setShotbook(j2.shots||[]); } catch{}
-      } } } catch{}
+      try{
+        const r = await fetch('/api/build_status'); const j = await r.json();
+        if(j.ok){
+          setBuildStatus({ running:j.running, itemsDone:j.itemsDone, lastMessage:j.lastMessage });
+          if(j.running){ t = setTimeout(poll, 1200); } else {
+            try{ const r2 = await fetch('/api/shotbook'); const j2 = await r2.json(); if (j2.ok) setShotbook(j2.shots||[]); } catch{}
+          }
+        }
+      } catch{}
     }
     poll();
-    return ()=>{ if(t) clearTimeout(t); };
-  }, [img]);
+    return ()=>{ if (t) clearTimeout(t); };
+  }, [buildStatus?.running]);
   useEffect(()=>{
     (async ()=>{
       try { const r = await fetch("/api/shotbook"); const j = await r.json(); if (j.ok) setShotbook(j.shots||[]); } catch {}
@@ -136,19 +143,33 @@ export default function Home() {
       overlayBase64 = renderOverlayPNG(sceneModel, cam, placements.map(p=>({ name:p.name, heightCm:p.heightCm, x:p.x, y:p.y, facingDeg:p.facingDeg })), 1024, 576);
       posLock = positionLockText(placements);
     }
-    const r = await fetch("/api/generate", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ camera: presetCam, extra: "Anime style enforced; SceneLock fixed.", profiles, settingProfile: setting, useNearestRefs: useNearest, overlayBase64, charPlacements: placements, positionLock: posLock, settingId: activeSettingId })});
-    if (!r.ok) return alert(await r.text());
-    const b = await r.arrayBuffer();
-    const remain = r.headers.get('X-Usage-Remaining'); if (remain) setUsageRemaining(+remain);
-    setImg(`data:image/png;base64,${Buffer.from(b).toString("base64")}`);
-    setStep(4);
+    try{
+      setShotStatus({ running:true, cache:null, message:"Rendering…" });
+      const r = await fetch("/api/generate", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ camera: presetCam, extra: "Anime style enforced; SceneLock fixed.", profiles, settingProfile: setting, useNearestRefs: useNearest, overlayBase64, charPlacements: placements, positionLock: posLock, settingId: activeSettingId })});
+      if (!r.ok) { const err = await r.text(); setShotStatus({ running:false, cache:null, message: err || "Error" }); return; }
+      const b = await r.arrayBuffer();
+      const remain = r.headers.get('X-Usage-Remaining'); if (remain) setUsageRemaining(+remain);
+      const cacheHdr = (r.headers.get('X-Cache') as any) || null;
+      setImg(`data:image/png;base64,${Buffer.from(b).toString("base64")}`);
+      setShotStatus({ running:false, cache: (cacheHdr==='HIT'||cacheHdr==='MISS')? cacheHdr as any : null, message: cacheHdr? `Done (${cacheHdr})` : 'Done' });
+      setStep(4);
+    } catch(e:any){ setShotStatus({ running:false, cache:null, message: e?.message || 'Error' }); }
   };
 
   // Render Kit triggers
   async function runKit(targets: string[]) {
-    const r = await fetch("/api/build_kit",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ targets, dryRun:false, profiles, settingProfile: setting })});
-    const j = await r.json(); if(!j.ok){ alert(j.error||"Build failed"); return; }
-    alert(`Built ${j.items.length} items.\n(See .cache/render_kit/ in project.)`);
+    // pre-mark running and kick off status polling immediately
+    setBuildStatus({ running:true, itemsDone: 0, lastMessage: "starting…" });
+    setTimeout(async ()=>{
+      try{
+        const r = await fetch("/api/build_kit",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ targets, dryRun:false, profiles, settingProfile: setting })});
+        const j = await r.json(); if(!j.ok){ alert(j.error||"Build failed"); return; }
+        alert(`Built ${j.items.length} items.\n(See .cache/render_kit/ in project.)`);
+      } catch(e:any){ alert(e?.message||"Build failed"); } finally {
+        // force a final status refresh
+        try{ const rs = await fetch('/api/build_status'); const js = await rs.json(); if(js.ok) setBuildStatus({ running: js.running, itemsDone: js.itemsDone, lastMessage: js.lastMessage }); } catch{}
+      }
+    }, 0);
   }
 
   async function exportZip() {
@@ -156,6 +177,15 @@ export default function Home() {
     if (!r.ok) { alert(await r.text()); return; }
     const blob = await r.blob(); const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = "continuity-pack.zip"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
+  async function resetBuildStatus(wipe = false){
+    try{
+      const url = wipe ? "/api/build_reset?wipe=1" : "/api/build_reset";
+      await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ wipe }) });
+      const rs = await fetch('/api/build_status'); const js = await rs.json();
+      if (js.ok) setBuildStatus({ running: js.running, itemsDone: js.itemsDone, lastMessage: js.lastMessage });
+    } catch(e:any) { alert(e?.message||"Reset failed"); }
   }
 
   // ---------- UI ----------
@@ -175,7 +205,7 @@ export default function Home() {
     <main className="container">
       <h1>Continuity Director + SceneLock</h1>
       <p style={{ marginTop:-4 }}>
-        <a href="/designer" style={{ color:"#7c9cff" }}>Open Setting Designer</a>
+        <a href="/designer" target="_blank" rel="noreferrer noopener" style={{ color:"#7c9cff" }}>Open Setting Designer</a>
       </p>
       <p><strong>Style:</strong> Anime / cel-shaded only. Setting & scale locked. Wireframe and palette included for stability.</p>
       <div className="progress"><div className="progress__bar" style={{ width: `${Math.min(100, (step/6)*100)}%` }} /></div>
@@ -239,7 +269,7 @@ export default function Home() {
             <option value="">(fallback: yc_room_v1)</option>
             {settings.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
-          <a href="/designer" style={{ marginLeft:6, fontSize:12 }}>Open Setting Designer ↗</a>
+          <a href="/designer" target="_blank" rel="noreferrer noopener" style={{ marginLeft:6, fontSize:12 }}>Open Setting Designer ↗</a>
         </div>
         <textarea className="textarea" value={setting.description} onChange={e=>setSetting(s=>({ ...s, description: e.target.value }))} rows={3} placeholder="Example: YC glass wall with mullions every 3.5 ft; 84×36 in table centered at (10 ft, 7 ft); chair seat height 18 in; 65” TV at (19 ft, 7 ft); add YC decal band at mid-glass." />
         <div className="row" style={{ marginTop:6 }}>
@@ -303,6 +333,10 @@ export default function Home() {
           </div>
         )}
         <div className="row" style={{ marginTop:6 }}>
+          <button className="btn" onClick={()=>resetBuildStatus(false)}>Reset status</button>
+          <button className="btn btn--danger" onClick={()=>{ if (confirm('Wipe all Render Kit files and status?')) resetBuildStatus(true); }}>Wipe cache</button>
+        </div>
+        <div className="row" style={{ marginTop:6 }}>
           <button className="btn btn--primary" onClick={()=>setStep(4)} disabled={!readyForShots}>Continue to Direct Shots →</button>
         </div>
       </section>
@@ -312,9 +346,19 @@ export default function Home() {
         <StepHeader n={4} title="Direct Shots" locked={step<4} />
         <div className="row" style={{ marginBottom:8 }}>
           {Object.keys(cameraPresets).map(k=>
-            <button key={k} className="btn btn--primary" onClick={()=>gen(k as any)} disabled={!readyForShots}>{k}</button>
+            <button
+              key={k}
+              className={`btn ${cameraKey===k? 'btn--primary':''}`}
+              onClick={()=>setCameraKey(k as any)}
+              disabled={!readyForShots}
+            >{k}</button>
           )}
           <span className="muted">current: {cameraKey}</span>
+          <button className="btn btn--primary" onClick={()=>gen(cameraKey)} disabled={!readyForShots || shotStatus?.running}>Generate</button>
+        </div>
+        <div className="row" style={{ marginTop: -6 }}>
+          <span className="inline-note">{shotStatus?.running ? 'Rendering…' : (shotStatus?.message || 'Idle')}</span>
+          {shotStatus?.cache && <span className="chip">Cache {shotStatus.cache}</span>}
         </div>
 
         <details>

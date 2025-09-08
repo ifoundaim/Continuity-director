@@ -1,14 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { geminiImageCall, textPart, imagePart } from "../../lib/gemini";
 import { shotPrompt } from "../../lib/prompts";
+import { doorLockText, floorLockText, finishesLightingText } from "../../lib/prompts";
 import graphJson from "../../scene/yc_room_v1.json";
 import { keyOf, getCache, setCache } from "../../lib/cache";
 import type { CharacterProfile, SettingProfile } from "../../lib/types";
 import { renderWireframeSVG, renderWireframeSVGFromModel } from "../../lib/wireframe";
+import { buildRailsForCamera } from "../../lib/rails";
 import { recordShot, nearestShots } from "../../lib/continuity";
 import { auditImageForDrift } from "../../lib/audit";
 import { getSetting } from "../../server/settings_fs";
-import { finishesLightingText } from "../../lib/prompts";
+// removed duplicate import of finishesLightingText (already imported above)
 import { paletteSVG as scenePaletteSVG } from "../../lib/palette_card";
 import { bumpUsage } from "../../server/usage_fs";
 import fs from "fs";
@@ -50,46 +52,96 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const activeSceneModel = activeSceneDoc?.model || null;
 
     const finishesText = activeSceneModel ? finishesLightingText(activeSceneModel) : "";
+    const doorText = activeSceneModel ? doorLockText(activeSceneModel) : "";
+    const floorText = activeSceneModel ? floorLockText(activeSceneModel) : "";
+    const expo = (activeSceneModel as any)?.exposure_lock;
+    const wb = expo?.white_balance_K || (activeSceneModel as any)?.lighting?.cctK || 4300;
+    const ev = expo?.ev_target || "neutral";
+    const photorealStyle = `STYLE: photoreal office interior; correct global illumination; no depth-of-field blur; neutral post; respect exposure_lock (WB ${wb}K, EV ${ev}).`;
     const graphForPrompt = activeSceneModel ? modelToSceneGraph(activeSceneModel as any) : (graphJson as any);
 
     const prompt = shotPrompt(
       graphForPrompt as any,
       camera || (graphJson as any).default_camera,
-      [extra || "", positionLockStr, finishesText].filter(Boolean).join("\n\n"),
+      [doorText, floorText, finishesText, photorealStyle, extra || "", positionLockStr].filter(Boolean).join("\n\n"),
       profilesStable,
       settingStable.description || ""
     );
 
-    // Build parts (deterministic order):
+    // Build parts (deterministic order) per new spec:
     const parts: any[] = [];
-    // Build parts in intended strict order (avoid SVG images for Gemini):
-    // 0) Setting Plates (line then color) for current camera FOV if available in .cache/render_kit/perspectives
+    // 0) Palette Card → 1) Door Wireframe (current cam) → 2) Generic Wireframe (current cam)
+    // → 3) Carpet Pattern Card → 4) Setting Plates (line/color) → 5) Continuity refs
     try {
-      const rkDir = path.join(process.cwd(), ".cache", "render_kit", "perspectives");
-      if (fs.existsSync(rkDir)) {
-        const files = fs.readdirSync(rkDir);
-        const fov = camera?.fov_deg ?? (graphJson as any).default_camera.fov_deg;
+      const root = path.join(process.cwd(), ".cache", "render_kit");
+      // Palette card (scene)
+      const paletteFile = path.join(root, "palette_scene.svg");
+      if (fs.existsSync(paletteFile)) parts.push(imagePart(Buffer.from(fs.readFileSync(paletteFile).toString("base64"), "base64"), "image/svg+xml"));
+      // Door wireframe (per camera)
+      const fov = camera?.fov_deg ?? (graphJson as any).default_camera.fov_deg;
+      const doorDir = path.join(root, "door");
+      const doorFile = fs.existsSync(doorDir) ? fs.readdirSync(doorDir).find(f=>f.includes(`door_${fov}_`)) : undefined;
+      if (doorFile) parts.push(imagePart(fs.readFileSync(path.join(doorDir, doorFile))));
+      // Rails: material_atlas, constraints, orthos, wireframe, depth, normals, ao (strict order)
+      try {
+        const activeSceneDoc = settingId ? getSetting(settingId) : null;
+        const activeSceneModel = activeSceneDoc?.model || null;
+        const cam = camera || (graphJson as any).default_camera;
+        const { camKey } = await buildRailsForCamera(activeSceneModel || (graphJson as any), cam);
+        const railsDir = path.join(root, "rails", camKey);
+        const railsFiles = [
+          "material_atlas.png",
+          "constraints.svg",
+          "ortho_front.png",
+          "ortho_right.png",
+          "ortho_top.png",
+          "wireframe.svg",
+          "depth.png",
+          "normals.png",
+          "ao.png"
+        ];
+        for (const rf of railsFiles){ const pth = path.join(railsDir, rf); if (fs.existsSync(pth)) parts.push(imagePart(fs.readFileSync(pth), rf.endsWith(".svg")?"image/svg+xml":"image/png")); }
+        // Append perspective line/color after rails
+      } catch {}
+      // Generic wireframe (from render kit perspectives wireframes dir if available)
+      const wireDir = path.join(root, "wireframes");
+      const wireFile = fs.existsSync(wireDir) ? fs.readdirSync(wireDir).find(f=>f.includes(`wire_${fov}_`)) : undefined;
+      if (wireFile) {
+        parts.push(imagePart(fs.readFileSync(path.join(wireDir, wireFile))));
+      } else {
+        // Fallback: generate wireframe SVG from model or static graph
+        const wf = activeSceneModel ? renderWireframeSVGFromModel(activeSceneModel as any, `perspective FOV ${fov}`) : renderWireframeSVG(`perspective FOV ${fov}`);
+        parts.push({ inline_data: { data: Buffer.from(wf.svg, "utf8").toString("base64"), mime_type: "image/svg+xml" } });
+      }
+      // Carpet pattern card (global)
+      const carpetDir = path.join(root, "carpet");
+      const carpetFile = path.join(carpetDir, "carpet_card.png");
+      if (fs.existsSync(carpetFile)) parts.push(imagePart(fs.readFileSync(carpetFile)));
+      // Setting plates for current FOV: line then color
+      const persDir = path.join(root, "perspectives");
+      if (fs.existsSync(persDir)){
+        const files = fs.readdirSync(persDir);
         const line = files.find(f => f.includes(`perspective_${fov}_`) && f.includes("_line"));
         const color = files.find(f => f.includes(`perspective_${fov}_`) && f.includes("_color"));
-        if (line) parts.push(imagePart(fs.readFileSync(path.join(rkDir, line))));
-        if (color) parts.push(imagePart(fs.readFileSync(path.join(rkDir, color))));
+        if (line) parts.push(imagePart(fs.readFileSync(path.join(persDir, line))));
+        if (color) parts.push(imagePart(fs.readFileSync(path.join(persDir, color))));
       }
     } catch {}
-    // 1) Prompt text (constant)
+    // 6) Prompt text (constant)
     parts.push(textPart(prompt));
-    // 2) Setting refs (sorted)
+    // 7) Setting refs (sorted)
     for (const b64 of settingStable.images_base64.slice(0, 6)) {
       const buf = Buffer.from(b64.split(",").pop()!, "base64");
       parts.push(imagePart(buf));
     }
-    // 3) Character refs (sorted by name; each sorted internally)
+    // 8) Character refs (sorted by name; each sorted internally)
     for (const p of profilesStable) {
       for (const b64 of (p.images_base64 || []).slice(0, 4)) {
         const buf = Buffer.from(b64.split(",").pop()!, "base64");
         parts.push(imagePart(buf));
       }
     }
-    // 4) Continuity memory (nearest past shots; older first)
+    // 9) Continuity memory (nearest past shots; older first)
     if (useNearestRefs) {
       const neighbors = nearestShots(camera || (graphJson as any).default_camera, 2);
       for (const nb of neighbors) parts.push(imagePart(nb, "image/png"));
@@ -103,6 +155,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const contents = [{ role: "user", parts }];
 
     // Stable cache key
+    // Deterministic hashes for door/carpet + finishes
+    const doorHash = keyOf((activeSceneModel?.doors||[]).slice().sort((a:any,b:any)=> String(a.id||"").localeCompare(String(b.id||""))));
+    const carpetHash = keyOf(activeSceneModel?.carpet || null);
+    const finishesVersion = activeSceneModel?.finishes_version_id || null;
+    const cameraKey = keyOf(camera || (graphJson as any).default_camera);
+
     const cacheKey = keyOf({
       endpoint: "generate",
       prompt, // already stable wording/order
@@ -115,11 +173,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       positionLock: positionLockStr || null,
       settingId: settingId || null,
       paletteHash: null,
-      platesFov: camera?.fov_deg ?? (graphJson as any).default_camera.fov_deg
+      platesFov: camera?.fov_deg ?? (graphJson as any).default_camera.fov_deg,
+      finishesVersion,
+      doorHash,
+      carpetHash,
+      cameraKey
     });
 
     const cached = getCache(cacheKey);
-    if (cached) { res.setHeader("X-Cache", "HIT"); res.setHeader("Content-Type", "image/png"); return res.send(cached); }
+    if (cached) {
+      res.setHeader("X-Cache", "HIT");
+      res.setHeader("X-Rails-Order", "material_atlas,constraints,ortho_front,ortho_right,ortho_top,wireframe,depth,normals,ao,plate_line,plate_color,continuity");
+      res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey }));
+      res.setHeader("Content-Type", "image/png");
+      return res.send(cached);
+    }
 
     const buf = await geminiImageCall(apiKey, contents);
     const usage = bumpUsage("generate", 100);
@@ -135,6 +203,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     res.setHeader("X-Cache", "MISS");
     res.setHeader("X-Usage-Remaining", String(usage.remaining));
+    res.setHeader("X-Rails-Order", "material_atlas,constraints,ortho_front,ortho_right,ortho_top,wireframe,depth,normals,ao,plate_line,plate_color,continuity");
+    res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey }));
     res.setHeader("Content-Type", "image/png");
     res.send(buf);
   } catch (e:any) {

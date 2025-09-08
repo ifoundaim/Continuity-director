@@ -83,6 +83,45 @@ export function finishesLightingText(scene: SceneModel){
   return lines.join("\n");
 }
 
+function fmtFeet(x?: number, p=1){ return (x==null?"":Number(x).toFixed(p)); }
+function fmtInches(x?: number){ return Math.round(Number(x||0)); }
+
+export function doorLockText(scene: SceneModel){
+  const doors = [...(scene as any).doors || []].sort((a:any,b:any)=> String(a.id||"").localeCompare(String(b.id||"")));
+  if (!doors.length) return "";
+  const lines: string[] = ["DOOR LOCK:"];
+  for (const d of doors){
+    lines.push(`- ${d.id} on wall ${d.wall}: center (${fmtFeet(d.cx_ft)}, ${fmtFeet(d.cy_ft)} ft), size ${fmtInches(d.width_in)}×${fmtInches(d.height_in)} in, hinge ${d.hinge}, swing ${fmtInches(d.swing_deg)}°, glass:${!!d.glass}, frame ${d.frame_hex||""}.`);
+    if (d.decal){
+      const deco = d.decal;
+      const name = deco.svg_id || deco.png_ref || "";
+      lines.push(`- ${d.id} decal: '${name}', center (${fmtFeet(deco.cx_ft)}, ${fmtFeet(deco.cy_ft)} ft), scale ${Number(deco.scale||1).toFixed(2)}, hex ${deco.hex||""}.`);
+    }
+  }
+  lines.push("Keep door size, hinge side, swing angle, and position identical across shots.");
+  return lines.join("\n");
+}
+
+export function floorLockText(scene: SceneModel){
+  const c:any = (scene as any).carpet || null;
+  if (!c) return "";
+  const lines: string[] = ["FLOOR LOCK:"];
+  if (c.pattern === "carpet_tiles"){
+    const list = (c.accent_hex_list||[]);
+    const rule = c.accent_rule||"every_nth";
+    const n = c.accent_n!=null ? ` n=${Number(c.accent_n||0)}` : "";
+    const stripe = c.stripe_w_in!=null ? ` stripe_w ${Number(c.stripe_w_in||0)} in` : "";
+    const grout = c.grout_hex ? `, grout ${c.grout_hex} width ${Number(c.grout_w_in||0)} in` : "";
+    lines.push(`- carpet_tiles ${fmtInches(c.tile_w_in)}×${fmtInches(c.tile_h_in)} in, rotation ${fmtInches(c.rotation_deg)}°, accent_hex ${JSON.stringify(list)} rule '${rule}'${n}${stripe}${grout}.`);
+  } else if (c.pattern === "rug_on_concrete"){
+    lines.push(`- rug ${fmtFeet(c.rug_w_ft,1)}×${fmtFeet(c.rug_d_ft,1)} ft centered (${fmtFeet(c.cx_ft,1)}, ${fmtFeet(c.cy_ft,1)}), border ${c.border_hex}, field ${c.field_hex}.`);
+  } else {
+    lines.push("- broadloom carpet over pad.");
+  }
+  lines.push("Keep pattern, rotation, accent rule, and scale identical across shots.");
+  return lines.join("\n");
+}
+
 export const shotPrompt = (
   graph: SceneGraph,
   camera: { fov_deg:number; pos:[number,number,number]; look_at:[number,number,number]},
@@ -93,7 +132,6 @@ export const shotPrompt = (
 ${sceneLockHeader(graph)}
 ${settingNotes ? `SETTING NOTES: ${settingNotes}\n` : ""}
 ${charactersSection(profiles || [])}
-STYLE: ANIME / CEL-SHADED ONLY. Clean line art, flat color blocks, soft ambient occlusion. Avoid photoreal language.
 Camera: FOV ${camera.fov_deg}°, position ${camera.pos.join(", ")}, look_at ${camera.look_at.join(", ")}. Adhere to perspective and room proportions. Keep all fixed objects in place.
 ${objectLock(graph)}
 ${extra}
