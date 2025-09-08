@@ -225,8 +225,10 @@ export default function Home() {
         <div className="row" style={{ marginTop:6 }}>
           <button className="btn" onClick={async()=>{
             try{
-              if(!sceneModel){ const r = await fetch("/api/get-scene"); const j = await r.json(); if(j.ok) setSceneModel(j.scene); }
-              const r = await fetch("/api/describe_setting", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ model: sceneModel })});
+              let modelForDesc = sceneModel;
+              // Always fetch fresh active scene to reflect current dropdown selection
+              const r1 = await fetch("/api/get-scene"); const j1 = await r1.json(); if(j1.ok){ setSceneModel(j1.scene); modelForDesc = j1.scene; }
+              const r = await fetch("/api/describe_setting", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ model: modelForDesc })});
               const j = await r.json(); if(!j?.text) return alert(j.error||"Describe failed");
               setSetting(s=>({ ...s, description: [s.description, j.text].filter(Boolean).join("\n\n") }));
             } catch(e:any){ alert(e?.message||"Failed to describe"); }

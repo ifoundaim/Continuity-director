@@ -38,6 +38,8 @@ export default function handler(_req: NextApiRequest, res: NextApiResponse) {
             roomFinish: YC_DESCRIPTIONS.room_finish.description,
             preset: scene.meta?.preset || "yc_room"
           };
+          // Ensure the model carries the saved setting's name for downstream prompts/descriptions
+          scene.name = doc.name || scene.name || "";
         } catch {}
         return res.status(200).json({ ok:true, scene, meta:{ id:active, name:doc.name }});
       }
@@ -73,6 +75,7 @@ export default function handler(_req: NextApiRequest, res: NextApiResponse) {
         roomFinish: YC_DESCRIPTIONS.room_finish.description,
         preset: scene.meta?.preset || "yc_room"
       };
+      scene.name = scene.name || "yc_room_v1";
     } catch {}
     res.status(200).json({ ok:true, scene, meta:{ id:"fallback", name:"yc_room_v1" } });
   } catch (e:any) {
