@@ -98,6 +98,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const railsFiles = [
           "material_atlas.png",
           "constraints.svg",
+          "constraints_perspective.png",
           "ortho_front.png",
           "ortho_right.png",
           "ortho_top.png",

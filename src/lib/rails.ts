@@ -3,6 +3,7 @@ import path from "path";
 import type { SceneModel } from "./scene_model";
 import type { Vector3 } from "./types";
 import { keyOf } from "./cache";
+import { projectPt } from "./camera";
 
 export type Camera = { fov_deg:number; pos:[number,number,number]; look_at:[number,number,number]; up?:[number,number,number]; near?:number; far?:number };
 
@@ -46,6 +47,64 @@ function constraintsSVG(model: SceneModel, w=1000, h=700){
     parts.push(`<circle cx="${sx(hx)}" cy="${sy(hy)}" r="4" fill="#111"/>`);
     parts.push(`<polyline points="${pts.join(" ")}" fill="none" stroke="#1C1F22" stroke-width="2" stroke-dasharray="5 4"/>`);
   }
+  parts.push(`</svg>`);
+  return parts.join("");
+}
+
+function perspectiveConstraintsSVG(model: SceneModel, camera: Camera, w=1000, h=700){
+  const parts: string[] = [];
+  const svgHeader = (W:number,H:number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" shape-rendering="crispEdges">`;
+  parts.push(svgHeader(w,h));
+  parts.push(`<rect width="100%" height="100%" fill="#FFFFFF"/>`);
+  // camera pose
+  const camPose = {
+    pos: { x: camera.pos[0], y: camera.pos[1], z: camera.pos[2] },
+    lookAt: { x: camera.look_at[0], y: camera.look_at[1], z: camera.look_at[2] },
+    up: { x:0, y:0, z:1 }, fovDeg: camera.fov_deg, imgW: w, imgH: h
+  } as any;
+  const drawLine = (a:any,b:any,stroke="#1C1F22",width=2, dash?:string)=>{
+    if(!a||!b) return; parts.push(`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${stroke}" stroke-width="${width}" ${dash?`stroke-dasharray="${dash}"`:``}/>`);
+  };
+  // Floor perimeter
+  const P = [
+    projectPt(camPose, {x:0,y:0,z:0}),
+    projectPt(camPose, {x:model.room.width,y:0,z:0}),
+    projectPt(camPose, {x:model.room.width,y:model.room.depth,z:0}),
+    projectPt(camPose, {x:0,y:model.room.depth,z:0}),
+  ];
+  for(let i=0;i<4;i++) drawLine(P[i], P[(i+1)%4], "#000", 2);
+  // Carpet grid (axis-aligned)
+  const c:any = (model as any).carpet || null;
+  if (c?.pattern === "carpet_tiles"){
+    const tw = Math.max(0.5, (c.tile_w_in||24)/12);
+    const th = Math.max(0.5, (c.tile_h_in||24)/12);
+    for(let x=0; x<=model.room.width; x+=tw){
+      const a = projectPt(camPose, {x, y:0, z:0});
+      const b = projectPt(camPose, {x, y:model.room.depth, z:0});
+      drawLine(a,b,"#bbbbbb",1);
+    }
+    for(let y=0; y<=model.room.depth; y+=th){
+      const a = projectPt(camPose, {x:0, y, z:0});
+      const b = projectPt(camPose, {x:model.room.width, y, z:0});
+      drawLine(a,b,"#bbbbbb",1);
+    }
+  }
+  // Door swing arc
+  for(const d of (model.doors||[])){
+    const leafWft = (d.width_in||36)/12; const thickft = Math.max(0.1,(d.thickness_in||2)/12);
+    let ux=0,uy=0,vx=0,vy=0; if(d.wall==="E"||d.wall==="W"){ ux=0; uy=1; vx=(d.wall==="E"?-1:1); vy=0; } else { ux=1; uy=0; vx=0; vy=(d.wall==="S"?-1:1); }
+    const sign = (d.hinge === "right") ? 1 : -1; const hx = d.cx_ft + (ux * sign) * (leafWft/2); const hy = d.cy_ft + (uy * sign) * (leafWft/2);
+    const steps = Math.max(8, Math.round((d.swing_deg||0)/10)); let last:any=null;
+    for(let k=0;k<=steps;k++){
+      const ang=(Math.max(0,Math.min(180,d.swing_deg||0))*(k/steps))*Math.PI/180; const px= hx + Math.cos(ang)*(-ux*leafWft) + Math.sin(ang)*(vx*leafWft); const py= hy + Math.cos(ang)*(-uy*leafWft) + Math.sin(ang)*(vy*leafWft);
+      const cur = projectPt(camPose,{x:px,y:py,z:0}); if(last&&cur) drawLine(last,cur,"#1C1F22",2,"5 4"); last=cur;
+    }
+    const hinge = projectPt(camPose,{x:hx,y:hy,z:0}); if(hinge) parts.push(`<circle cx="${hinge.x}" cy="${hinge.y}" r="4" fill="#1C1F22"/>`);
+  }
+  // Scale bar ~5 ft at far wall
+  const a = projectPt(camPose,{x:0,y:model.room.depth-0.5,z:0});
+  const b = projectPt(camPose,{x:5,y:model.room.depth-0.5,z:0});
+  if(a&&b){ drawLine(a,b,"#222",2); parts.push(`<text x="${b.x+6}" y="${b.y+4}" font-size="12">5 ft</text>`); }
   parts.push(`</svg>`);
   return parts.join("");
 }
@@ -107,6 +166,9 @@ export async function buildRailsForCamera(model: SceneModel, camera: Camera){
   const cam = { ...camera, up: camera.up || [0,0,1], near: camera.near || 0.1, far: camera.far || 100 };
   const cameraJson = { ...cam, camera_key: camKey };
   fs.writeFileSync(path.join(outDir, "camera.json"), JSON.stringify(cameraJson, null, 2), "utf8");
+  // perspective constraints overlay
+  const overlaySvg = perspectiveConstraintsSVG(model, camera, W, H);
+  fs.writeFileSync(path.join(outDir, "constraints_perspective.png"), await svgToPng(overlaySvg));
   return { outDir, camKey };
 }
 
