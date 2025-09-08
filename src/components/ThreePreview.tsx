@@ -172,7 +172,10 @@ export default function ThreePreview({ model, width, height, onPick, onEditLabel
       if(intersects.length){
         let obj: any = intersects[0].object; let id: string | null = null;
         while(obj){ if (obj.userData && obj.userData.id){ id = String(obj.userData.id); break; } obj = obj.parent; }
-        if (id && idToMesh[id]){ draggingId = id; (controls as any).enabled = false; }
+        if (id && idToMesh[id]){
+          const mesh = idToMesh[id] as any; if (mesh.userData?.locked) return; // guard locked
+          draggingId = id; (controls as any).enabled = false;
+        }
       }
     }
     function onMouseMove(ev: MouseEvent){

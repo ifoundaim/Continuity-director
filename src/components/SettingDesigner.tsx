@@ -34,6 +34,17 @@ function clamp(v:number, a:number, b:number){ return Math.max(a, Math.min(b, v))
 
 export default function SettingDesigner({ initial, onChange, onExport, onBuildPlates }: Props){
   const [model, setModel] = useState<SceneModel>(initial || defaultYCModel());
+  const undoStack = useRef<SceneModel[]>([]);
+  const redoStack = useRef<SceneModel[]>([]);
+
+  function pushHistory(prev: SceneModel){
+    undoStack.current.push(JSON.parse(JSON.stringify(prev)));
+    if (undoStack.current.length > 50) undoStack.current.shift();
+    redoStack.current = [];
+  }
+  function undo(){ const prev = undoStack.current.pop(); if (!prev) return; redoStack.current.push(JSON.parse(JSON.stringify(model))); setModel(prev); }
+  function redo(){ const next = redoStack.current.pop(); if (!next) return; undoStack.current.push(JSON.parse(JSON.stringify(model))); setModel(next); }
+
   const [sel, setSel] = useState<string|null>(null);
   const [units, setUnits] = useState<Units>(model.units || "ft");
   const [scale, setScale] = useState(1);
@@ -99,7 +110,10 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   useEffect(()=>setScale(pxPerFt),[pxPerFt]);
 
   useEffect(()=>{ onChange?.(model); localStorage.setItem("settingDesigner:model", JSON.stringify(model)); }, [model]);
-  useEffect(()=>{ const s = localStorage.getItem("settingDesigner:model"); if(s && !initial){ try{ setModel(JSON.parse(s)); }catch{} } }, []);
+  useEffect(()=>{ const s = localStorage.getItem("settingDesigner:model"); if(s && !initial){ try{ const loaded = JSON.parse(s); if (loaded?.objects){ for (const o of loaded.objects){ if (o.locked==null) o.locked = true; } } setModel(loaded); }catch{} } else {
+    // autolock defaults
+    setModel(m=>({ ...m, objects: m.objects.map(o=> ({ ...o, locked: o.locked ?? true })) }));
+  } }, []);
   useEffect(()=>{ setDirty(true); }, [model]);
 
   useEffect(()=>{
@@ -159,22 +173,26 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
       const o = { ...m.objects[i] };
 
       if(drag.mode === "move"){
+        if (o.locked) return m;
         const nx = snap(fromPx(toPx(o.cx) + dx));
         const ny = snap(fromPx(toPx(o.cy) + dy));
         o.cx = Math.max(0, Math.min(m.room.width, nx));
         o.cy = Math.max(0, Math.min(m.room.depth, ny));
       } else if (drag.mode === "resize"){
+        if (o.locked) return m;
         const nw = snap(o.w + fromPx(dx));
         const nd = snap(o.d + fromPx(dy));
         o.w = Math.max(0.2, nw);
         o.d = Math.max(0.2, nd);
       } else if (drag.mode === "rotate"){
+        if (o.locked) return m;
         const cx = toCanvasX(o.cx), cy = toCanvasY(o.cy);
         const ang = Math.atan2(y - cy, x - cx) * 180/Math.PI; // -180..180 (0 = east)
         let rot = degClamp(ang + 90);
         if ((e as any).shiftKey) rot = Math.round(rot/15)*15;
         o.rotation = rot; o.facing = rot;
       } else if (drag.mode === "bubble"){
+        if (o.locked) return m;
         const dir = dirNow; if(!dir) return m;
         const step = fromPx(Math.abs(dir==="N"||dir==="S" ? dy : dx));
         const sign = (dir==="E"||dir==="S") ? 1 : -1;
@@ -367,9 +385,14 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
   // keyboard
   useEffect(()=>{
     function onKey(ev:KeyboardEvent){
+      if (ev.metaKey || ev.ctrlKey){
+        if (ev.key.toLowerCase()==="z" && !ev.shiftKey){ ev.preventDefault(); undo(); return; }
+        if (ev.key.toLowerCase()==="z" && ev.shiftKey){ ev.preventDefault(); redo(); return; }
+      }
       if(!selected) return;
       const step = ev.shiftKey ? 2 : 0.5;
       if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Backspace","Delete","r","R"].includes(ev.key)) ev.preventDefault();
+      if(selected.locked) return;
       if(ev.key==="ArrowUp") updateSelected({ cy: snap(Math.max(0, (selected.cy||0) - step)) });
       if(ev.key==="ArrowDown") updateSelected({ cy: snap(Math.min(model.room.depth, (selected.cy||0) + step)) });
       if(ev.key==="ArrowLeft") updateSelected({ cx: snap(Math.max(0, (selected.cx||0) - step)) });
@@ -673,6 +696,8 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
           <button className="btn-ghost" title="Fit to room" onClick={zoomFit}>Fit</button>
           <button className="btn-ghost" title="Zoom 100%" onClick={zoom100}>100%</button>
           <button className="btn-ghost" title="Diagnostics" onClick={()=>setShowDiag(s=>!s)}>Diagnostics</button>
+          <button className="btn-ghost" title="Undo (Cmd/Ctrl+Z)" onClick={undo}>Undo</button>
+          <button className="btn-ghost" title="Redo (Shift+Cmd/Ctrl+Z)" onClick={redo}>Redo</button>
         </div>
         {/* Finishes & Lighting collapsible; moved camera tabs into toolbar to avoid duplication */}
         <details className="panel compact" style={{ margin:12 }}>
@@ -1028,7 +1053,10 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
                 if(!found) return;
                 setLabelEdit({ id, x, y, value: found.label || found.kind });
               }} onDrag={(id, cx, cy)=>{
-                setModel(m=>({ ...m, objects: m.objects.map(o=> o.id===id ? { ...o, cx, cy } : o ) }));
+                setModel(m=>{
+                  const prev = JSON.parse(JSON.stringify(m)); pushHistory(prev);
+                  return { ...m, objects: m.objects.map(o=> o.id===id ? (o.locked ? o : { ...o, cx, cy }) : o ) };
+                });
               }} />
             </div>
             {labelEdit && (
@@ -1101,7 +1129,7 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
               <label>Center Y<input type="number" step={0.1} value={selected.cy} onChange={e=>updateSelected({ cy:+e.target.value })} /></label>
               <label>Rotation°<input type="number" step={1} value={selected.rotation||0} onChange={e=>updateSelected({ rotation: degClamp(+e.target.value) })} /></label>
               <label>Facing°<input type="number" step={1} value={selected.facing ?? selected.rotation ?? 0} onChange={e=>updateSelected({ facing: degClamp(+e.target.value) })} /></label>
-              <label>Wall<select value={selected.wall||""} onChange={e=>updateSelected({ wall:(e.target.value||undefined) as any })}>
+              <label>Wall<select value={selected.wall||""} onChange={e=>{ pushHistory(model); updateSelected({ wall:(e.target.value||undefined) as any }); }}>
                 <option value="">(none)</option><option value="N">N</option><option value="S">S</option><option value="E">E</option><option value="W">W</option>
               </select></label>
               <label>Layer<select value={selected.layer||"floor"} onChange={e=>updateSelected({ layer: (e.target.value||"floor") as any })}>
@@ -1109,6 +1137,10 @@ export default function SettingDesigner({ initial, onChange, onExport, onBuildPl
                 <option value="surface">surface (on table)</option>
                 <option value="wall">wall</option>
                 <option value="ceiling">ceiling</option>
+              </select></label>
+              <label>Locked<select value={selected.locked?"yes":"no"} onChange={e=>updateSelected({ locked: e.target.value==="yes" } as any)}>
+                <option value="yes">yes</option>
+                <option value="no">no</option>
               </select></label>
               <div style={{ gridColumn:"1 / span 2", display:"flex", gap:6 }}>
                 <button className="btn" onClick={()=>{

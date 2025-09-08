@@ -122,8 +122,9 @@ export function defaultYCModel(): SceneModel {
       const chairClear = 1.5 + 0.2; // 18" + 0.2 ft margin
       const northY = table.cy - table.d/2 - (chairD/2) - chairClear;
       const southY = table.cy + table.d/2 + (chairD/2) + chairClear;
-      const tvW = 5.7/12*1; const tvD = 0.3; const tvX = roomW; // center on E wall
-      const wbW = 6/12*1; const wbD = 0.2;  const wbX = 0;      // center on W wall
+      // Corrected real-world sizes (ft)
+      const tvW = 4.8; const tvD = 0.3; const tvX = roomW; // approx 65" 16:9 width
+      const wbW = 6.0; const wbD = 0.2;  const wbX = 0;      // 6×4 ft board
       const panelD = 0.2; const panelY = 0; // center on N wall
       const decalD = 0.1; const decalY = 9.5; const decalX = roomW; // centered on E wall, spaced from TV
       return [
@@ -132,8 +133,8 @@ export function defaultYCModel(): SceneModel {
         { id:"chairs_n2", kind:"chair", label:"chair_N2", cx:10+1.6, cy:northY, w:chairW, d:chairD, h:1.5, layer:"floor" } as SceneObject,
         { id:"chairs_s1", kind:"chair", label:"chair_S1", cx:10-1.6, cy:southY, w:chairW, d:chairD, h:1.5, layer:"floor" } as SceneObject,
         { id:"chairs_s2", kind:"chair", label:"chair_S2", cx:10+1.6, cy:southY, w:chairW, d:chairD, h:1.5, layer:"floor" } as SceneObject,
-        { id:"whiteboard", kind:"whiteboard", label:"whiteboard", cx:wbX, cy:7, w:wbW, d:wbD, h:4/12*1, wall:"W", mount_h:7, layer:"wall" } as SceneObject,
-        { id:"tv", kind:"tv", label:"tv_65", cx:tvX, cy:7, w:tvW, d:tvD, h:3.2/12*1, wall:"E", mount_h:7, layer:"wall" } as SceneObject,
+        { id:"whiteboard", kind:"whiteboard", label:"whiteboard", cx:wbX, cy:7, w:wbW, d:wbD, h:4.0, wall:"W", mount_h:7, layer:"wall" } as SceneObject,
+        { id:"tv", kind:"tv", label:"tv_65", cx:tvX, cy:7, w:tvW, d:tvD, h:2.7, wall:"E", mount_h:7, layer:"wall" } as SceneObject,
         { id:"panels1", kind:"panel", label:"panel1", cx:12, cy:panelY, w:2, d:panelD, h:4, wall:"N", mount_h:5.5, layer:"wall", rotation:0 } as SceneObject,
         { id:"panels2", kind:"panel", label:"panel2", cx:14.5, cy:panelY, w:2, d:panelD, h:4, wall:"N", mount_h:5.5, layer:"wall", rotation:0 } as SceneObject,
         { id:"panels3", kind:"panel", label:"panel3", cx:17, cy:panelY, w:2, d:panelD, h:4, wall:"N", mount_h:5.5, layer:"wall", rotation:0 } as SceneObject,
