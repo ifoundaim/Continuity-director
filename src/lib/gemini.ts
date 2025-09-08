@@ -35,9 +35,21 @@ export async function geminiImageCall(apiKey: string, contents: any) {
   if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text()}`);
   const json = await res.json();
   const parts = json.candidates?.[0]?.content?.parts || [];
-  const img = parts.find((p: any) => p.inline_data?.mime_type?.startsWith("image/"));
-  if (!img) throw new Error("No image in response");
-  return Buffer.from(img.inline_data.data, "base64");
+  const imgPart = parts.find((p: any) =>
+    (p.inline_data?.mime_type?.startsWith("image/")) ||
+    (p.inlineData?.mimeType?.startsWith("image/")) ||
+    (p.fileData?.mimeType?.startsWith?.("image/") && p.fileData?.fileUri)
+  );
+  if (!imgPart) throw new Error("No image in response");
+  if (imgPart.inline_data) return Buffer.from(imgPart.inline_data.data, "base64");
+  if (imgPart.inlineData) return Buffer.from(imgPart.inlineData.data, "base64");
+  if (imgPart.fileData?.fileUri){
+    const r = await fetch(imgPart.fileData.fileUri);
+    if(!r.ok) throw new Error(`Failed to fetch fileData: ${await r.text()}`);
+    const ab = await r.arrayBuffer();
+    return Buffer.from(new Uint8Array(ab));
+  }
+  throw new Error("No image in response");
 }
 
 export const textPart = (text: string) => ({ text });
