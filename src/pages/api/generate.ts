@@ -76,40 +76,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Build parts (deterministic order) per new spec:
     const parts: any[] = [];
-    // 0) Palette Card → 1) Door Wireframe (current cam) → 2) Generic Wireframe (current cam)
-    // → 3) Carpet Pattern Card → 4) Setting Plates (line/color) → 5) Continuity refs
+    // Strict order (highest weight first): Anchor (if exists) → Perspective Constraints → Rails → Palette → Door → Wireframe → Carpet → Plates → Text → Setting/Chars → Continuity
     try {
       const root = path.join(process.cwd(), ".cache", "render_kit");
+      const fov = camera?.fov_deg ?? (graphJson as any).default_camera.fov_deg;
+      // 0) Anchor (if available for current locks and setting)
+      const activeSettingId = settingId || null;
+      const locksHashes = { finishesVersion, doorHash, carpetHash, cameraKey: null } as any;
+      const anchor = getAnchor(activeSettingId, locksHashes);
+      if (anchor) parts.push(imagePart(anchor));
+      // 1) Perspective constraints overlay (from Rails)
+      try{
+        const cam = camera || (graphJson as any).default_camera;
+        const { camKey } = await buildRailsForCamera(activeSceneModel || (graphJson as any), cam);
+        const overPng = path.join(root, "rails", camKey, "constraints_perspective.png");
+        if (fs.existsSync(overPng)) parts.push(imagePart(fs.readFileSync(overPng)));
+        // 2) Rails (material_atlas..ao)
+        const railsDir = path.join(root, "rails", camKey);
+        const railsFiles = ["material_atlas.png","constraints.svg","ortho_front.png","ortho_right.png","ortho_top.png","wireframe.svg","depth.png","normals.png","ao.png"];
+        for (const rf of railsFiles){ const pth = path.join(railsDir, rf); if (fs.existsSync(pth)) parts.push(imagePart(fs.readFileSync(pth), rf.endsWith(".svg")?"image/svg+xml":"image/png")); }
+      } catch {}
       // Palette card (scene)
       const paletteFile = path.join(root, "palette_scene.svg");
       if (fs.existsSync(paletteFile)) parts.push(imagePart(Buffer.from(fs.readFileSync(paletteFile).toString("base64"), "base64"), "image/svg+xml"));
       // Door wireframe (per camera)
-      const fov = camera?.fov_deg ?? (graphJson as any).default_camera.fov_deg;
       const doorDir = path.join(root, "door");
       const doorFile = fs.existsSync(doorDir) ? fs.readdirSync(doorDir).find(f=>f.includes(`door_${fov}_`)) : undefined;
       if (doorFile) parts.push(imagePart(fs.readFileSync(path.join(doorDir, doorFile))));
-      // Rails: material_atlas, constraints, orthos, wireframe, depth, normals, ao (strict order)
-      try {
-        const activeSceneDoc = settingId ? getSetting(settingId) : null;
-        const activeSceneModel = activeSceneDoc?.model || null;
-        const cam = camera || (graphJson as any).default_camera;
-        const { camKey } = await buildRailsForCamera(activeSceneModel || (graphJson as any), cam);
-        const railsDir = path.join(root, "rails", camKey);
-        const railsFiles = [
-          "material_atlas.png",
-          "constraints.svg",
-          "constraints_perspective.png",
-          "ortho_front.png",
-          "ortho_right.png",
-          "ortho_top.png",
-          "wireframe.svg",
-          "depth.png",
-          "normals.png",
-          "ao.png"
-        ];
-        for (const rf of railsFiles){ const pth = path.join(railsDir, rf); if (fs.existsSync(pth)) parts.push(imagePart(fs.readFileSync(pth), rf.endsWith(".svg")?"image/svg+xml":"image/png")); }
-        // Append perspective line/color after rails
-      } catch {}
+      // (Rails moved above)
       // Generic wireframe (from render kit perspectives wireframes dir if available)
       const wireDir = path.join(root, "wireframes");
       const wireFile = fs.existsSync(wireDir) ? fs.readdirSync(wireDir).find(f=>f.includes(`wire_${fov}_`)) : undefined;
@@ -134,11 +128,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (color) parts.push(imagePart(fs.readFileSync(path.join(persDir, color))));
       }
     } catch {}
-    // 6) Anchor image (if available for current locks and setting) — place BEFORE text to weight it higher
-    const activeSettingId = settingId || null;
-    const locksHashes = { finishesVersion, doorHash, carpetHash, cameraKey: null } as any;
-    const anchor = getAnchor(activeSettingId, locksHashes);
-    if (anchor) parts.push(imagePart(anchor));
     // 7) Prompt text (constant)
     parts.push(textPart(prompt));
     // 8) Setting refs (skip when anchor exists to avoid conflicting training examples)
@@ -221,8 +210,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Optional corrective loop (stubbed)
     const audit = await auditImageForDrift(buf);
-    // If audit.drift === true, we could call /api/edit here with a correction.
-    // For now we just return the first pass.
+    // Simple stabilization: if drift flagged, re-hit with edit-only correction using the same anchor
+    if (audit?.drift) {
+      try{
+        const correction = "EDIT ONLY: make the setting identical to the anchor reference. Preserve door hinge/width/swing and carpet tile density/rotation. Do not move fixed objects or change camera perspective.";
+        const parts2:any[] = [];
+        if (anchor) parts2.push(imagePart(anchor));
+        parts2.push(textPart(correction));
+        parts2.push(imagePart(buf)); // base image to edit
+        const buf2 = await geminiImageCall(apiKey, [{ role:"user", parts: parts2 }]);
+        setCache(cacheKey, buf2);
+        res.setHeader("X-Cache", "MISS");
+        res.setHeader("X-Usage-Remaining", String(usage.remaining));
+        res.setHeader("X-Rails-Order", "material_atlas,constraints,ortho_front,ortho_right,ortho_top,wireframe,depth,normals,ao,plate_line,plate_color,continuity");
+        res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey, anchor: !!anchor }));
+        res.setHeader("Content-Type", "image/png");
+        return res.send(buf2);
+      } catch {}
+    }
 
     res.setHeader("X-Cache", "MISS");
     res.setHeader("X-Usage-Remaining", String(usage.remaining));

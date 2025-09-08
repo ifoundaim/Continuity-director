@@ -34,7 +34,7 @@ export async function geminiImageCall(apiKey: string, contents: any) {
       const res = await fetch(`${ENDPOINT}?key=${apiKey}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents })
+        body: JSON.stringify({ contents, generationConfig: { temperature: 0.1, topP: 0.8, candidateCount: 1 } })
       });
       if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text()}`);
       json = await res.json();

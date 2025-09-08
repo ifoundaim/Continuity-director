@@ -57,7 +57,9 @@ export function nearestShotsMatching(
       if (filter.hashes.doorHash !== undefined && h.doorHash !== filter.hashes.doorHash) return false;
       if (filter.hashes.carpetHash !== undefined && h.carpetHash !== filter.hashes.carpetHash) return false;
     }
-    return true;
+    // camera family similarity: penalize large FOV or look_at differences
+    const fovDeltaOk = Math.abs((e.camera?.fov_deg||0) - (camera?.fov_deg||0)) <= 10;
+    return fovDeltaOk;
   });
   const sorted = cand
     .map(e => ({ e, d: dist(e.camera, camera) }))
