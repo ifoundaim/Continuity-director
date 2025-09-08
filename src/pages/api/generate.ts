@@ -134,17 +134,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (color) parts.push(imagePart(fs.readFileSync(path.join(persDir, color))));
       }
     } catch {}
-    // 6) Prompt text (constant)
-    parts.push(textPart(prompt));
-    // 7) Anchor image (if available for current locks and setting)
+    // 6) Anchor image (if available for current locks and setting) — place BEFORE text to weight it higher
     const activeSettingId = settingId || null;
     const locksHashes = { finishesVersion, doorHash, carpetHash, cameraKey: null } as any;
     const anchor = getAnchor(activeSettingId, locksHashes);
     if (anchor) parts.push(imagePart(anchor));
-    // 8) Setting refs (sorted)
-    for (const b64 of settingStable.images_base64.slice(0, 6)) {
-      const buf = Buffer.from(b64.split(",").pop()!, "base64");
-      parts.push(imagePart(buf));
+    // 7) Prompt text (constant)
+    parts.push(textPart(prompt));
+    // 8) Setting refs (skip when anchor exists to avoid conflicting training examples)
+    if (!anchor) {
+      for (const b64 of settingStable.images_base64.slice(0, 6)) {
+        const buf = Buffer.from(b64.split(",").pop()!, "base64");
+        parts.push(imagePart(buf));
+      }
     }
     // 9) Character refs (sorted by name; each sorted internally)
     for (const p of profilesStable) {
@@ -153,15 +155,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         parts.push(imagePart(buf));
       }
     }
-    // 10) Continuity memory (nearest past shots; filtered to current locks; skip anchor)
-    if (useNearestRefs) {
-      const neighbors = nearestShotsMatching(
-        camera || (graphJson as any).default_camera,
-        2,
-        { settingId: activeSettingId, hashes: { finishesVersion, doorHash, carpetHash }, excludeAnchor: true }
-      );
-      for (const nb of neighbors) parts.push(imagePart(nb, "image/png"));
-    }
+    // 10) Continuity memory (filtered to current locks; always include when anchor exists, else respect toggle)
+    const neighbors = (anchor || useNearestRefs)
+      ? nearestShotsMatching(
+          camera || (graphJson as any).default_camera,
+          2,
+          { settingId: activeSettingId, hashes: { finishesVersion, doorHash, carpetHash }, excludeAnchor: true }
+        )
+      : [];
+    for (const nb of neighbors) parts.push(imagePart(nb, "image/png"));
     // Overlay (optional): put FIRST if provided
     if (overlayBase64) {
       const buf = Buffer.from(overlayBase64.split(",").pop()!, "base64");
@@ -172,6 +174,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Stable cache key (use previously computed locks hashes)
 
+    const neighborHashes = neighbors.map(nb => keyOf(nb.toString("base64")));
     const cacheKey = keyOf({
       endpoint: "generate",
       prompt, // already stable wording/order
@@ -188,14 +191,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       finishesVersion,
       doorHash,
       carpetHash,
-      cameraKey
+      cameraKey,
+      anchor: !!anchor,
+      neighborHashes
     });
 
     const cached = getCache(cacheKey);
     if (cached) {
       res.setHeader("X-Cache", "HIT");
       res.setHeader("X-Rails-Order", "material_atlas,constraints,ortho_front,ortho_right,ortho_top,wireframe,depth,normals,ao,plate_line,plate_color,continuity");
-      res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey, anchor: !!anchor }));
+      res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey, anchor: !!anchor, neighbors: neighborHashes }));
       res.setHeader("Content-Type", "image/png");
       return res.send(cached);
     }
@@ -222,7 +227,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader("X-Cache", "MISS");
     res.setHeader("X-Usage-Remaining", String(usage.remaining));
     res.setHeader("X-Rails-Order", "material_atlas,constraints,ortho_front,ortho_right,ortho_top,wireframe,depth,normals,ao,plate_line,plate_color,continuity");
-    res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey, anchor: !!anchor }));
+    res.setHeader("X-Hashes", JSON.stringify({ finishesVersion, doorHash, carpetHash, cameraKey, anchor: !!anchor, neighbors: neighborHashes }));
     res.setHeader("Content-Type", "image/png");
     res.send(buf);
   } catch (e:any) {
