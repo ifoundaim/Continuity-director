@@ -272,6 +272,7 @@ export default function Home() {
           <button className="btn" disabled={!readyForRenderKit} onClick={()=>runKit(["elevations"]) }>Elevations</button>
           <button className="btn" disabled={!readyForRenderKit} onClick={()=>runKit(["perspectives"]) }>Perspective Plates (line+color)</button>
           <button className="btn btn--primary" disabled={!readyForRenderKit} onClick={()=>runKit(["full_pack"]) }>Full Pack</button>
+          <a className="btn" href="/api/export_pack" download>Download Continuity Pack (.zip)</a>
         </div>
         <div className="row" style={{ marginTop:6 }}>
           <button className="btn btn--primary" onClick={()=>setStep(4)} disabled={!readyForShots}>Continue to Direct Shots →</button>

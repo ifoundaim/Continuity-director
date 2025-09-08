@@ -72,6 +72,19 @@ export async function buildCharacterSheets(profiles: CharacterProfile[], setting
   return manifest;
 }
 
+async function svgToPngBase64(svg: string): Promise<string> {
+  try {
+    const mod:any = await import("sharp");
+    const sharp = mod.default || mod;
+    const png = await sharp(Buffer.from(svg)).png().toBuffer();
+    return png.toString("base64");
+  } catch {
+    // Fallback tiny PNG if converter not available
+    const oneByOnePngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
+    return oneByOnePngBase64;
+  }
+}
+
 export async function buildFloorPlan(setting: SettingProfile) {
   const outDir = path.join(ROOT, "floor_plan"); ensureDir(outDir);
   const wire = renderWireframeSVG("floor_plan");
@@ -83,7 +96,8 @@ export async function buildFloorPlan(setting: SettingProfile) {
   ].join("\n");
 
   const parts:any[] = [];
-  parts.push({ inline_data: { data: Buffer.from(wire.svg).toString("base64"), mime_type: wire.mime } });
+  const png = await svgToPngBase64(wire.svg);
+  parts.push({ inline_data: { data: png, mime_type: "image/png" } });
   parts.push(textPart(prompt));
   for (const b64 of stableImages(setting.images_base64).slice(0,4)) parts.push(imagePart(bufOfDataURL(b64)));
 
@@ -109,7 +123,8 @@ export async function buildElevations(setting: SettingProfile) {
     ].join("\n");
 
     const parts:any[] = [];
-    parts.push({ inline_data: { data: Buffer.from(wire.svg).toString("base64"), mime_type: wire.mime } });
+    const png = await svgToPngBase64(wire.svg);
+    parts.push({ inline_data: { data: png, mime_type: "image/png" } });
     parts.push(textPart(prompt));
     for (const b64 of stableImages(setting.images_base64).slice(0,4)) parts.push(imagePart(bufOfDataURL(b64)));
 
@@ -149,8 +164,9 @@ export async function buildPerspectives(profiles: CharacterProfile[], setting: S
     );
 
     const parts:any[] = [];
-    // wireframe first
-    parts.push({ inline_data: { data: Buffer.from(wire.svg).toString("base64"), mime_type: wire.mime } });
+    // wireframe first (as PNG for Gemini)
+    const png = await svgToPngBase64(wire.svg);
+    parts.push({ inline_data: { data: png, mime_type: "image/png" } });
     // stable prompt
     parts.push(textPart(prompt));
     // setting refs then character refs
@@ -203,7 +219,8 @@ export async function buildRoomRefs(profiles: CharacterProfile[], setting: Setti
       (setting?.description || "")
     );
     const parts:any[] = [];
-    parts.push({ inline_data: { data: Buffer.from(wire.svg).toString("base64"), mime_type: wire.mime } });
+    const png = await svgToPngBase64(wire.svg);
+    parts.push({ inline_data: { data: png, mime_type: "image/png" } });
     parts.push(textPart(prompt));
     for (const b64 of stableImages(setting.images_base64).slice(0,6)) parts.push(imagePart(bufOfDataURL(b64)));
     for (const p of stableProfiles(profiles)) for (const b64 of (p.images_base64 || []).slice(0,4)) parts.push(imagePart(bufOfDataURL(b64)));
