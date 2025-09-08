@@ -19,12 +19,16 @@ type PreviewInfo = { prompt:string; counts:{refImages:number; characterImages:nu
 
 export default function Home() {
   // ---------- persisted state ----------
+  // Use deterministic defaults for SSR to avoid hydration mismatch
   const defaultProfiles: CharacterProfile[] = [
-    { id: uid(), name: "Aim", height_cm: 170, description: "", images_base64: [] },
-    { id: uid(), name: "Em",  height_cm: 160.02, description: "", images_base64: [] }
+    { id: "aim", name: "Aim", height_cm: 170, description: "", images_base64: [] },
+    { id: "em",  name: "Em",  height_cm: 160.02, description: "", images_base64: [] }
   ];
-  const [profiles, setProfiles] = useState<CharacterProfile[]>(loadProfiles(defaultProfiles));
-  const [setting, setSetting]   = useState<SettingProfile>(loadSetting<SettingProfile>({ description: "", images_base64: [] }));
+  const [profiles, setProfiles] = useState<CharacterProfile[]>(defaultProfiles);
+  const [setting, setSetting]   = useState<SettingProfile>({ description: "", images_base64: [] });
+  // Load persisted values on client after mount (keeps SSR/CSR initial markup identical)
+  useEffect(()=>{ setProfiles(loadProfiles(defaultProfiles)); }, []);
+  useEffect(()=>{ setSetting(loadSetting<SettingProfile>({ description: "", images_base64: [] })); }, []);
   useEffect(()=>saveProfiles(profiles), [profiles]);
   useEffect(()=>saveSetting(setting), [setting]);
   useEffect(()=>{
