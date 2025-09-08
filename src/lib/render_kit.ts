@@ -188,8 +188,11 @@ export async function buildPerspectives(profiles: CharacterProfile[], setting: S
     for (const p of stableProfiles(profiles)) {
       for (const b64 of (p.images_base64 || []).slice(0,4)) parts.push(imagePart(bufOfDataURL(b64)));
     }
-    // palette card
-    parts.push({ inline_data: { data: b64OfSVG(palette.svg), mime_type: palette.mime } });
+    // palette card (convert to PNG for API)
+    {
+      const palPng = await svgToPngBase64(palette.svg);
+      parts.push({ inline_data: { data: palPng, mime_type: "image/png" } });
+    }
 
     const contents = [{ role: "user", parts }];
     const buf = await geminiImageCall(process.env.GEMINI_API_KEY!, contents);
@@ -239,7 +242,10 @@ export async function buildRoomRefs(profiles: CharacterProfile[], setting: Setti
     parts.push(textPart(prompt));
     for (const b64 of stableImages(setting.images_base64).slice(0,6)) parts.push(imagePart(bufOfDataURL(b64)));
     for (const p of stableProfiles(profiles)) for (const b64 of (p.images_base64 || []).slice(0,4)) parts.push(imagePart(bufOfDataURL(b64)));
-    parts.push({ inline_data: { data: b64OfSVG(palette.svg), mime_type: palette.mime } });
+    {
+      const palPng = await svgToPngBase64(palette.svg);
+      parts.push({ inline_data: { data: palPng, mime_type: "image/png" } });
+    }
     const contents = [{ role: "user", parts }];
     const buf = await geminiImageCall(process.env.GEMINI_API_KEY!, contents);
     const file = path.join(outDir, `room_ref_${cam.fov_deg}_${keyOf(cam)}.png`);
